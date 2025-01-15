@@ -1,41 +1,34 @@
 import os
+from src.paths import RAW_VIDEOS_DIR
 import subprocess
 
-def download_video(youtube_url, output_path="data/raw"):
+def download_video(youtube_url):
     """
-    Télécharge une vidéo depuis YouTube en utilisant yt-dlp.
+    Télécharge une vidéo depuis YouTube dans le dossier RAW_VIDEOS_DIR.
 
     Args:
-        youtube_url (str): Lien de la vidéo YouTube.
-        output_path (str): Chemin du répertoire où enregistrer la vidéo.
+        youtube_url (str): URL de la vidéo YouTube.
 
     Returns:
         str: Chemin complet de la vidéo téléchargée.
         None: En cas d'échec.
     """
     try:
-        if not os.path.exists(output_path):
-            os.makedirs(output_path)
-
-        # Commande yt-dlp pour télécharger la vidéo
+        # Commande yt-dlp
         command = [
             "yt-dlp",
             youtube_url,
-            "-o", os.path.join(output_path, "%(title)s.%(ext)s"),
+            "-o", os.path.join(RAW_VIDEOS_DIR, "%(title)s.%(ext)s"),
             "--merge-output-format", "mp4"
         ]
 
-        # Exécuter la commande
         result = subprocess.run(command, capture_output=True, text=True)
-
-        # Vérification de l'exécution
         if result.returncode != 0:
             print(f"Erreur lors du téléchargement : {result.stderr}")
             return None
 
-        # Extraire le chemin du fichier depuis la sortie standard
-        print(f"Téléchargement réussi : {result.stdout}")
-        return os.path.join(output_path, f"{youtube_url.split('=')[-1]}.mp4")  # Nom générique
+        print(f"Vidéo téléchargée avec succès : {result.stdout}")
+        return RAW_VIDEOS_DIR
     except Exception as e:
-        print(f"Erreur inattendue lors du téléchargement : {e}")
+        print(f"Erreur inattendue : {e}")
         return None
