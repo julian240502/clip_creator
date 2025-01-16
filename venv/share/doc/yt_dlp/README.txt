@@ -2145,15 +2145,15 @@ youtube
 -   player_client: Clients to extract video data from. The main clients
     are web, ios and android, with variants _music and _creator (e.g.
     ios_creator); and mweb, android_vr, web_safari, web_embedded, tv and
-    tv_embedded with no variants. By default, ios,tv is used, or
-    web_creator,tv is used when authenticating with cookies. The _music
-    variants are added for music.youtube.com URLs. Some clients, such as
-    web and android, require a po_token for their formats to be
+    tv_embedded with no variants. By default, tv,ios,web is used, or
+    tv,web is used when authenticating with cookies. The _music variants
+    may be added for music.youtube.com URLs. Some clients, such as web
+    and android, require a po_token for their formats to be
     downloadable. Some clients, such as the _creator variants, will only
     work with authentication. Not all clients support authentication via
-    cookies. You can use all to use all the clients, and default for the
-    default clients. You can prefix a client with - to exclude it, e.g.
-    youtube:player_client=all,-web
+    cookies. You can use default for the default clients, or you can use
+    all for all clients (not recommended). You can prefix a client with
+    - to exclude it, e.g. youtube:player_client=default,-ios
 -   player_skip: Skip some network requests that are generally needed
     for robust extraction. One or more of configs (skip client configs),
     webpage (skip initial webpage), js (skip js player). While these

@@ -2618,19 +2618,19 @@ with variants \f[C]_music\f[R] and \f[C]_creator\f[R] (e.g.
 \f[C]ios_creator\f[R]); and \f[C]mweb\f[R], \f[C]android_vr\f[R],
 \f[C]web_safari\f[R], \f[C]web_embedded\f[R], \f[C]tv\f[R] and
 \f[C]tv_embedded\f[R] with no variants.
-By default, \f[C]ios,tv\f[R] is used, or \f[C]web_creator,tv\f[R] is
-used when authenticating with cookies.
-The \f[C]_music\f[R] variants are added for \f[C]music.youtube.com\f[R]
-URLs.
+By default, \f[C]tv,ios,web\f[R] is used, or \f[C]tv,web\f[R] is used
+when authenticating with cookies.
+The \f[C]_music\f[R] variants may be added for
+\f[C]music.youtube.com\f[R] URLs.
 Some clients, such as \f[C]web\f[R] and \f[C]android\f[R], require a
 \f[C]po_token\f[R] for their formats to be downloadable.
 Some clients, such as the \f[C]_creator\f[R] variants, will only work
 with authentication.
 Not all clients support authentication via cookies.
-You can use \f[C]all\f[R] to use all the clients, and \f[C]default\f[R]
-for the default clients.
+You can use \f[C]default\f[R] for the default clients, or you can use
+\f[C]all\f[R] for all clients (not recommended).
 You can prefix a client with \f[C]-\f[R] to exclude it, e.g.
-\f[C]youtube:player_client=all,-web\f[R]
+\f[C]youtube:player_client=default,-ios\f[R]
 .IP \[bu] 2
 \f[C]player_skip\f[R]: Skip some network requests that are generally
 needed for robust extraction.
