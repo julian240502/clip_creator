@@ -3,8 +3,9 @@ Date début de projet : 15/01/2025
 # Clip Creator
 
 installer ffmpeg avec winget et pip
-!!!!! winget install ffmpeg  !!!
-
+```bash
+winget install ffmpeg 
+```
 ## Description
 Clip Creator est un outil pour créer des clips vidéo à partir de séquences brutes. Il permet de découper, éditer et assembler des vidéos facilement et rapidement.
 
