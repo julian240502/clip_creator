@@ -1,3 +1,5 @@
+Date début de projet : 15/01/2025
+
 # Clip Creator
 
 installer ffmpeg avec winget et pip
