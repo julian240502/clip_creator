@@ -23,8 +23,8 @@ Clip Creator est un outil pour créer des clips vidéo à partir de séquences b
 - Exportation en différents formats 
 
 ## Framework utilisé
-yt-dlp : pour le download
-ffmpeg : ajouts de sous-ttire
+- yt-dlp : pour le download <br/>
+- ffmpeg : ajouts de sous-ttire 
 
 ## Installation
 Clonez le dépôt et installez les dépendances :
