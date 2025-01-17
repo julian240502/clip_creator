@@ -14,7 +14,7 @@ Clip Creator est un outil pour créer des clips vidéo à partir de séquences b
 - Sous-titre des vidéos [OK]
 - Découpage en Clips pour des formats courts[OK]
 - Optimisation pour TikTok/Shorts : [1/2]<br/> 
-    - Redimensionnement.<br/> [OK]
+    - Redimensionnement [OK]<br/> 
     - Effet visuel de sous-titres / Gameplay(sous la video) [en cours]
 ## Next step
 - Génération de titres et de hashtag
