@@ -34,7 +34,7 @@ def add_subtitles_ffmpeg(input_video, subtitles_file, output_path=None):
         command = [
             "ffmpeg", "-i", input_video,
             "-vf", f"subtitles={subtitles_file}",
-            output_path
+            output_path,"-y"
         ]
 
         # Afficher la commande pour debugging

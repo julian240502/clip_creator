@@ -43,7 +43,8 @@ def download_video(youtube_url):
             "-o", os.path.join(RAW_VIDEOS_DIR, "%(title)s.%(ext)s"),
             "--write-auto-subs", "--sub-format", "vtt",
             "--merge-output-format", "mp4",
-            "--no-overwrites"
+            "--no-overwrites",
+            
         ]
         print("Téléchargement en cours :", " ".join(download_command))
         download_result = subprocess.run(download_command, capture_output=True, text=True)
