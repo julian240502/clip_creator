@@ -4,8 +4,8 @@ from src.paths import RAW_VIDEOS_DIR, PROCESSED_VIDEOS_DIR
 
 def test_add_subtitles_ffmpeg():
     # Chemins de test relatifs
-    video_path = "data/raw/test.mp4"
-    subtitles_path = "data/raw/test.vtt"
+    video_path = r"data\raw\Les campus de CY Tech.mp4"
+    subtitles_path = r"data\raw\Les campus de CY Tech.en.vtt"
     output_path = "data/process/test_subtitled.mp4"
 
     # Cas 1 : Avec chemin de sortie explicite

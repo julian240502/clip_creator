@@ -20,16 +20,15 @@ def add_subtitles_ffmpeg(input_video, subtitles_file, output_path=None):
 
         # Générer un chemin de sortie si nécessaire
         if output_path is None:
-            base, ext = os.path.splitext(input_video)
-            output_path = f"{base}_subtitled{ext}"
+            base, ext = os.path.splitext(os.path.basename(input_video))
+            output_path = os.path.join("data", "process", f"{base}_subtitled{ext}")
         else:
             output_path = os.path.relpath(output_path).replace("\\", "/")
 
-            # Encodage des chemins en UTF-8 pour gérer les caractères spéciaux
-            input_video = input_video.encode('utf-8').decode('utf-8')
-            subtitles_file = subtitles_file.encode('utf-8').decode('utf-8')
-            output_path = output_path.encode('utf-8').decode('utf-8')
-
+        # Encodage des chemins en UTF-8 pour gérer les caractères spéciaux
+        input_video = input_video.encode('utf-8').decode('utf-8')
+        subtitles_file = subtitles_file.encode('utf-8').decode('utf-8')
+        output_path = output_path.encode('utf-8').decode('utf-8')
 
         # Générer la commande FFmpeg
         command = [
@@ -47,8 +46,8 @@ def add_subtitles_ffmpeg(input_video, subtitles_file, output_path=None):
             print(f"Erreur FFmpeg : {result.stderr}")
             return None
 
-        print(f"Vidéo sous-titrée générée : {output_path}")
         return output_path
+
     except Exception as e:
-        print(f"Erreur inattendue : {e}")
+        print(f"Exception lors de l'ajout des sous-titres : {str(e)}")
         return None
