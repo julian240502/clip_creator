@@ -1,12 +1,6 @@
 import os
 import subprocess
 
-import subprocess
-import os
-
-import os
-import subprocess
-
 def add_subtitles_ffmpeg(input_video, subtitles_file, output_path=None):
     """
     Ajoute des sous-titres à une vidéo avec FFmpeg, en générant dynamiquement le chemin de sortie si nécessaire.
