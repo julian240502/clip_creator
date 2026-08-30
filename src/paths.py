@@ -12,10 +12,6 @@ RAW_VIDEOS_DIR = os.path.join(DATA_DIR, "raw")
 # Chemin pour les fichiers de transcription
 TRANSCRIPTIONS_DIR = os.path.join(DATA_DIR, "transcriptions")
 
-# Chemin pour les vidéos sous-titrées (process)
-PROCESSED_VIDEOS_DIR = os.path.join(DATA_DIR, "process")
-
 # Assure que les dossiers existent
 os.makedirs(RAW_VIDEOS_DIR, exist_ok=True)
 os.makedirs(TRANSCRIPTIONS_DIR, exist_ok=True)
-os.makedirs(PROCESSED_VIDEOS_DIR, exist_ok=True)
