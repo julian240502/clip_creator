@@ -19,6 +19,8 @@ ENCODER_LABELS = {
     "h264_amf": "AMD · AMF",
 }
 
+ENCODING_SPEEDS = ("fast", "balanced", "quality")
+
 
 @lru_cache(maxsize=None)
 def _encoder_works(encoder: str) -> bool:
@@ -43,6 +45,24 @@ def available_hardware_encoders() -> tuple[str, ...]:
     )
 
 
+@lru_cache(maxsize=1)
+def cuda_scaling_available() -> bool:
+    """Vérifie que FFmpeg peut transférer, redimensionner et encoder via CUDA."""
+    if not _encoder_works("h264_nvenc"):
+        return False
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=black:size=64x64:rate=1:duration=0.1",
+        "-frames:v", "1",
+        "-vf", "format=nv12,hwupload_cuda,scale_cuda=w=64:h=64:format=nv12",
+        "-c:v", "h264_nvenc", "-preset", "p1", "-f", "null", os.devnull,
+    ]
+    try:
+        return subprocess.run(command, capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def resolve_video_encoder(preference: str = "auto") -> str:
     if preference == "auto":
         available = available_hardware_encoders()
@@ -55,15 +75,41 @@ def resolve_video_encoder(preference: str = "auto") -> str:
     return encoder
 
 
-def video_encoder_args(encoder: str) -> list[str]:
+def video_encoder_args(encoder: str, speed: str = "balanced") -> list[str]:
+    if speed not in ENCODING_SPEEDS:
+        raise ValueError("Vitesse inconnue. Utilisez fast, balanced ou quality.")
     if encoder == "h264_nvenc":
-        return ["-c:v", encoder, "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", "21", "-b:v", "0"]
+        settings = {
+            "fast": ("p1", "23"),
+            "balanced": ("p4", "21"),
+            "quality": ("p6", "19"),
+        }
+        preset, cq = settings[speed]
+        return ["-c:v", encoder, "-preset", preset, "-tune", "hq", "-rc", "vbr", "-cq", cq, "-b:v", "0"]
     if encoder == "h264_qsv":
-        return ["-c:v", encoder, "-preset", "faster", "-global_quality", "21"]
+        settings = {
+            "fast": ("veryfast", "23"),
+            "balanced": ("faster", "21"),
+            "quality": ("medium", "19"),
+        }
+        preset, quality = settings[speed]
+        return ["-c:v", encoder, "-preset", preset, "-global_quality", quality]
     if encoder == "h264_amf":
-        return ["-c:v", encoder, "-quality", "speed", "-rc", "cqp", "-qp_i", "20", "-qp_p", "22", "-qp_b", "24"]
+        settings = {
+            "fast": ("speed", "23", "25", "27"),
+            "balanced": ("balanced", "20", "22", "24"),
+            "quality": ("quality", "18", "20", "22"),
+        }
+        quality, qp_i, qp_p, qp_b = settings[speed]
+        return ["-c:v", encoder, "-quality", quality, "-rc", "cqp", "-qp_i", qp_i, "-qp_p", qp_p, "-qp_b", qp_b]
     if encoder == "libx264":
-        return ["-c:v", encoder, "-preset", "veryfast", "-crf", "20"]
+        settings = {
+            "fast": ("ultrafast", "23"),
+            "balanced": ("veryfast", "20"),
+            "quality": ("medium", "18"),
+        }
+        preset, crf = settings[speed]
+        return ["-c:v", encoder, "-preset", preset, "-crf", crf]
     raise ValueError(f"Encodeur FFmpeg non pris en charge : {encoder}")
 
 

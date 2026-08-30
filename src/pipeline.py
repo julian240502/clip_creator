@@ -26,6 +26,7 @@ def process_video(
     *, url: str | None = None, uploaded_path: str | Path | None = None,
     clip_length: int = 30, vertical: bool = True, vertical_mode: str = "crop",
     encoder: str = "auto", export_quality: str = "1080p",
+    encoding_speed: str = "balanced",
     progress: ProgressCallback | None = None,
 ) -> tuple[Path, list[Path]]:
     """Exécute le pipeline et renvoie le dossier projet et les exports finaux."""
@@ -53,7 +54,8 @@ def process_video(
         report(0.25, f"Découpage via {encoder_label(resolved_encoder)}…")
         landscape = [
             Path(item) for item in split_video(
-                source, clip_length, project_dir / "clips", encoder=encoder
+                source, clip_length, project_dir / "clips", encoder=encoder,
+                encoding_speed=encoding_speed,
             )
         ]
         report(1.0, "Exports terminés")
@@ -75,7 +77,8 @@ def process_video(
         exports.append(
             resize_clip_for_vertical(
                 source, output, vertical_mode, encoder=encoder,
-                quality=quality.key, start=start, duration=length,
+                encoding_speed=encoding_speed, quality=quality.key,
+                start=start, duration=length,
             )
         )
     report(1.0, "Exports terminés")

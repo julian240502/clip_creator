@@ -7,7 +7,12 @@ from pathlib import Path
 
 import streamlit as st
 
-from src.encoder import encoder_label, resolve_video_encoder
+from src.encoder import (
+    available_hardware_encoders,
+    cuda_scaling_available,
+    encoder_label,
+    resolve_video_encoder,
+)
 from src.pipeline import process_video
 from src.quality import get_quality_preset
 
@@ -46,11 +51,32 @@ with st.sidebar:
     vertical_mode = "crop" if mode_label.startswith("Recadrage") else "fit"
     detected_encoder = resolve_video_encoder("auto")
     automatic_label = f"Automatique · {encoder_label(detected_encoder)}"
-    encoder_choice = st.selectbox("Accélération", [automatic_label, "CPU · x264"])
-    encoder = "auto" if encoder_choice == automatic_label else "cpu"
+    encoder_preferences = {
+        "h264_nvenc": "nvidia",
+        "h264_qsv": "intel",
+        "h264_amf": "amd",
+    }
+    encoder_options = {automatic_label: "auto"}
+    for hardware_encoder in available_hardware_encoders():
+        encoder_options[encoder_label(hardware_encoder)] = encoder_preferences[hardware_encoder]
+    encoder_options["CPU · x264"] = "cpu"
+    encoder_choice = st.selectbox("Accélération", list(encoder_options))
+    encoder = encoder_options[encoder_choice]
+    speed_options = {
+        "Rapide — recommandé": "fast",
+        "Équilibrée": "balanced",
+        "Qualité maximale": "quality",
+    }
+    speed_choice = st.selectbox("Vitesse d'encodage", list(speed_options))
+    encoding_speed = speed_options[speed_choice]
     st.divider()
     dimensions = f"{quality.width} × {quality.height}" if vertical else f"source ≤ {quality.source_max_height}p"
-    st.caption(f"{dimensions} · H.264 · AAC · {encoder_label(resolve_video_encoder(encoder))}")
+    active_encoder = resolve_video_encoder(encoder)
+    cuda_active = vertical and vertical_mode == "crop" and active_encoder == "h264_nvenc" and cuda_scaling_available()
+    cuda_label = " · redimensionnement CUDA" if cuda_active else ""
+    st.caption(f"{dimensions} · H.264 · AAC · {encoder_label(active_encoder)}{cuda_label}")
+    if vertical and vertical_mode == "fit" and active_encoder == "h264_nvenc":
+        st.caption("Le mode avec bandes encode via NVENC, mais compose l'image sur le processeur.")
     if export_quality == "4k":
         st.caption("La 4K produit des fichiers plus lourds et demande plus de temps d'encodage.")
 
@@ -81,12 +107,13 @@ if submitted:
         project_dir, clips = process_video(
             url=url.strip() or None, uploaded_path=upload_path, clip_length=clip_length,
             vertical=vertical, vertical_mode=vertical_mode, encoder=encoder,
-            export_quality=export_quality,
+            export_quality=export_quality, encoding_speed=encoding_speed,
             progress=update_progress,
         )
         st.success(f"{len(clips)} clip(s) prêt(s) pour le montage.")
         archive_path = project_dir / "clip-creator-exports.zip"
-        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        # Les MP4 sont déjà compressés : les stocker évite une seconde passe CPU inutile.
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
             for clip in clips:
                 archive.write(clip, clip.name)
         with archive_path.open("rb") as archive:

@@ -88,3 +88,15 @@ def test_cpu_encoder_fallback() -> None:
     assert encoder == "libx264"
     assert "veryfast" in video_encoder_args(encoder)
     assert encoder_label(encoder) == "CPU · x264"
+
+
+def test_fast_nvenc_uses_fastest_preset() -> None:
+    arguments = video_encoder_args("h264_nvenc", "fast")
+    assert arguments[arguments.index("-preset") + 1] == "p1"
+    assert arguments[arguments.index("-cq") + 1] == "23"
+
+
+def test_fast_cpu_profile() -> None:
+    arguments = video_encoder_args("libx264", "fast")
+    assert "ultrafast" in arguments
+    assert "23" in arguments

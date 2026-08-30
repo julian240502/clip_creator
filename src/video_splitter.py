@@ -26,6 +26,7 @@ def split_video(
     clip_length: int,
     output_dir: str | Path,
     encoder: str = "auto",
+    encoding_speed: str = "balanced",
 ) -> list[str]:
     """Découpe précisément une vidéo avec un encodage compatible éditeurs mobiles."""
     source, destination = Path(video_path), Path(output_dir)
@@ -42,7 +43,8 @@ def split_video(
         output_path = destination / f"clip_{index + 1:03d}.mp4"
         command = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(start),
-            "-i", str(source), "-t", str(length), *video_encoder_args(resolved_encoder),
+            "-i", str(source), "-t", str(length),
+            *video_encoder_args(resolved_encoder, encoding_speed),
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart", str(output_path),
         ]
