@@ -30,7 +30,8 @@ def _black_background_filter(width: int, height: int, *, cuda: bool) -> str:
 def _blur_background_filter(width: int, height: int, *, cuda: bool) -> str:
     preview_width = max(180, width // 4)
     preview_height = max(320, height // 4)
-    blur_radius = max(8, preview_width // 18)
+    # Un flou modéré garde le fond identifiable sans concurrencer le premier plan.
+    blur_radius = max(6, preview_width // 28)
     if cuda:
         return (
             "[0:v]format=nv12,hwupload_cuda,split=2[background_source][foreground_source];"

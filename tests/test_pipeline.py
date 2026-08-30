@@ -84,7 +84,7 @@ def test_cuda_black_filter_scales_then_adds_bands() -> None:
 def test_cuda_blur_filter_uses_blurred_copy_as_background() -> None:
     video_filter = _blur_background_filter(1080, 1920, cuda=True)
     assert "split=2" in video_filter
-    assert "boxblur=" in video_filter
+    assert "boxblur=9:2" in video_filter
     assert "overlay_cuda=" in video_filter
     assert "[foreground]" in video_filter
 
