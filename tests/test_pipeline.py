@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from src.downloader import _format_selector, _validate_url
+from src import downloader
+from src.downloader import _format_selector, _validate_url, download_source
 from src.encoder import (
     PROBE_HEIGHT,
     PROBE_SOURCE,
@@ -22,6 +23,25 @@ from src.video_splitter import (
     resolve_source_window,
     split_video,
 )
+
+
+def test_download_source_caches_by_url_and_quality(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def fake_download_video(video_url: str, output_dir, max_height: int = 1080) -> str:
+        calls.append((video_url, max_height))
+        target = Path(output_dir) / "video.mp4"
+        target.write_bytes(b"data" * 50)
+        return str(target)
+
+    monkeypatch.setattr(downloader, "download_video", fake_download_video)
+    first = download_source("https://host.test/watch?v=abc", tmp_path, max_height=720)
+    second = download_source("https://host.test/watch?v=abc", tmp_path, max_height=720)
+    assert first == second
+    assert len(calls) == 1  # 2e appel servi depuis le cache
+    # Une autre qualité = un autre bucket = un nouveau téléchargement.
+    download_source("https://host.test/watch?v=abc", tmp_path, max_height=1080)
+    assert len(calls) == 2
 
 
 def test_split_video_is_precise(sample_video: Path, tmp_path: Path) -> None:

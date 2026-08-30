@@ -20,7 +20,7 @@ from pathlib import Path
 
 from src.paths import TRANSCRIPTIONS_DIR
 
-DEFAULT_MODEL = "large-v3"
+DEFAULT_MODEL = "large-v3-turbo"
 ProgressCallback = Callable[[float, str], None]
 
 

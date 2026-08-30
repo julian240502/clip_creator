@@ -8,11 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.downloader import download_video
+from src.downloader import download_source
 from src.encoder import encoder_label, resolve_video_encoder
-from src.paths import DATA_DIR
+from src.paths import DATA_DIR, SOURCE_CACHE_DIR
 from src.quality import get_quality_preset
 from src.resizer import resize_clip_for_vertical
+from src.transcribe import DEFAULT_MODEL
 from src.video_splitter import (
     get_video_duration,
     resolve_source_window,
@@ -40,7 +41,7 @@ def process_video(
     source_start: float | None = None,
     source_end: float | None = None,
     transcribe: bool = False,
-    transcribe_model: str = "large-v3",
+    transcribe_model: str = DEFAULT_MODEL,
     captions_style: CaptionStyle | None = None,
     on_clip: ClipCallback | None = None,
     progress: ProgressCallback | None = None,
@@ -58,7 +59,9 @@ def process_video(
     quality = get_quality_preset(export_quality)
     if url:
         report(0.08, f"Téléchargement de la vidéo · maximum {quality.label}…")
-        source = Path(download_video(url, source_dir, max_height=quality.source_max_height))
+        source = Path(
+            download_source(url, SOURCE_CACHE_DIR, max_height=quality.source_max_height)
+        )
     else:
         report(0.08, "Préparation du fichier…")
         incoming = Path(uploaded_path)

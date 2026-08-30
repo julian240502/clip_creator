@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -70,6 +71,21 @@ def download_video(
         if not info:
             raise RuntimeError("Aucune information vidéo reçue.")
     return _newest_media(destination)
+
+
+def download_source(video_url: str, cache_root: str | Path, max_height: int = 1080) -> str:
+    """Télécharge la vidéo, mise en cache par URL + qualité. Renvoie le fichier."""
+    url = _validate_url(video_url)
+    key = hashlib.sha1(f"{url}|{max_height}".encode()).hexdigest()[:16]
+    bucket = Path(cache_root) / key
+    bucket.mkdir(parents=True, exist_ok=True)
+    cached = [
+        path for path in bucket.iterdir()
+        if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}
+    ]
+    if cached:
+        return str(max(cached, key=lambda path: path.stat().st_size).resolve())
+    return download_video(url, bucket, max_height=max_height)
 
 
 def download_clip(
