@@ -4,7 +4,14 @@ from pathlib import Path
 import pytest
 
 from src.downloader import _format_selector, _validate_url
-from src.encoder import encoder_label, resolve_video_encoder, video_encoder_args
+from src.encoder import (
+    PROBE_HEIGHT,
+    PROBE_SOURCE,
+    PROBE_WIDTH,
+    encoder_label,
+    resolve_video_encoder,
+    video_encoder_args,
+)
 from src.resizer import (
     _black_background_filter,
     _blur_background_filter,
@@ -117,3 +124,8 @@ def test_fast_cpu_profile() -> None:
     arguments = video_encoder_args("libx264", "fast")
     assert "ultrafast" in arguments
     assert "23" in arguments
+
+
+def test_gpu_probe_uses_nvenc_compatible_dimensions() -> None:
+    assert (PROBE_WIDTH, PROBE_HEIGHT) == (320, 180)
+    assert "size=320x180" in PROBE_SOURCE

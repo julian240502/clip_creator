@@ -20,6 +20,11 @@ ENCODER_LABELS = {
 }
 
 ENCODING_SPEEDS = ("fast", "balanced", "quality")
+PROBE_WIDTH = 320
+PROBE_HEIGHT = 180
+PROBE_SOURCE = (
+    f"color=black:size={PROBE_WIDTH}x{PROBE_HEIGHT}:rate=1:duration=1"
+)
 
 
 @lru_cache(maxsize=None)
@@ -27,7 +32,7 @@ def _encoder_works(encoder: str) -> bool:
     """Vérifie que l'encodeur est compilé et utilisable avec le pilote présent."""
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", "color=black:size=64x64:rate=1:duration=0.1",
+        "-f", "lavfi", "-i", PROBE_SOURCE,
         "-frames:v", "1", "-pix_fmt", "yuv420p", "-c:v", encoder,
         "-f", "null", os.devnull,
     ]
@@ -52,9 +57,12 @@ def cuda_scaling_available() -> bool:
         return False
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", "color=black:size=64x64:rate=1:duration=0.1",
+        "-f", "lavfi", "-i", PROBE_SOURCE,
         "-frames:v", "1",
-        "-vf", "format=nv12,hwupload_cuda,scale_cuda=w=64:h=64:format=nv12",
+        "-vf", (
+            "format=nv12,hwupload_cuda,"
+            f"scale_cuda=w={PROBE_WIDTH}:h={PROBE_HEIGHT}:format=nv12"
+        ),
         "-c:v", "h264_nvenc", "-preset", "p1", "-f", "null", os.devnull,
     ]
     try:
