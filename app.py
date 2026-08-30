@@ -116,20 +116,33 @@ def _preview_source(source: dict, at: float, seconds: float = 4.0) -> Path:
     """Extrait court et local pour l'aperçu ; réutilisé tant que la portion ne change pas."""
     preview_dir = session_dir() / "preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
+    marker = round(at, 2)
     existing = next(preview_dir.glob("preview_source.*"), None)
-    if existing is not None and st.session_state.get("preview_at") == round(at, 2):
+    if existing is not None and existing.is_file() and st.session_state.get("preview_at") == marker:
         return existing
+
+    st.session_state.pop("preview_at", None)
+    for stale in preview_dir.glob("preview_source.*"):
+        stale.unlink(missing_ok=True)
     if source["kind"] == "url":
         clip = Path(download_clip(source["ref"], preview_dir, at, at + seconds, max_height=480))
     else:
         clip = preview_dir / "preview_source.mp4"
-        command = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", str(at), "-i", source["path"], "-t", str(seconds),
-            "-c:v", "libx264", "-c:a", "aac", str(clip),
-        ]
-        subprocess.run(command, capture_output=True, check=True)
-    st.session_state["preview_at"] = round(at, 2)
+        result = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", str(at), "-i", source["path"], "-t", str(seconds),
+                "-c:v", "libx264", "-c:a", "aac", str(clip),
+            ],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "Extraction de l'extrait impossible.")
+    if not clip.is_file():
+        raise RuntimeError(
+            "L'extrait d'aperçu n'a pas pu être produit — vérifiez la portion sélectionnée."
+        )
+    st.session_state["preview_at"] = marker
     return clip
 
 
@@ -144,6 +157,9 @@ def _transcript_has_words(project_dir: str) -> bool:
 
 
 def render_style_preview(source: dict, at: float, style, background: str) -> Path:
+    total = source.get("duration")
+    if total:
+        at = max(0.0, min(at, total - 4.0)) if total > 4.0 else 0.0
     short = _preview_source(source, at)
     duration = min(4.0, get_video_duration(short))
     quality = get_quality_preset(PREVIEW_QUALITY)
