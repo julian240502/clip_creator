@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import shutil
-import subprocess
 import tempfile
 import uuid
 import zipfile
@@ -22,12 +21,27 @@ st.markdown(
 html, body, [class*="css"] {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
-.stApp {background:radial-gradient(circle at 15% 0%,#20234b 0,#0d0e18 38%,#090a10 100%);color:#f7f7fb}
+.stApp {background:radial-gradient(circle at 15% 0%,#20234b 0,#0d0e18 38%,#090a10 100%);color:#f4f5fb}
 .hero {padding:2rem 0 1.2rem}
-.eyebrow {color:#a6a9ff;font-weight:700;letter-spacing:.13em;text-transform:uppercase;font-size:.75rem}
-.hero h1 {font-size:3rem;line-height:1;margin:.4rem 0;background:linear-gradient(90deg,#fff,#a9adff);-webkit-background-clip:text;color:transparent}
-.hero p {font-size:1.05rem;color:#a9abba;max-width:640px}
-[data-testid="stMetric"] {background:#171924;border:1px solid #292c3d;padding:1rem;border-radius:16px}
+.eyebrow {color:#b7baff;font-weight:700;letter-spacing:.13em;text-transform:uppercase;font-size:.78rem}
+.hero h1 {font-size:3rem;line-height:1;margin:.4rem 0;background:linear-gradient(90deg,#fff,#b8bcff);-webkit-background-clip:text;color:transparent}
+.hero p {font-size:1.05rem;color:#c6c8d6;max-width:640px}
+
+/* Lisibilité du texte secondaire sur le fond sombre */
+button[data-baseweb="tab"] {color:#cbcddc}
+button[data-baseweb="tab"] [data-testid="stMarkdownContainer"] p {color:inherit;font-weight:600}
+button[data-baseweb="tab"][aria-selected="true"] {color:#fff}
+label p, [data-testid="stWidgetLabel"] p {color:#e2e3f0 !important}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {color:#bcbfd0}
+[data-testid="stExpander"] summary p {color:#e2e3f0}
+[data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"] {color:#bcbfd0}
+
+/* Estimation mise en avant */
+[data-testid="stMetric"] {background:#181a26;border:1px solid #2c2f42;border-left:3px solid #8b87ff;padding:1rem 1.1rem;border-radius:14px}
+[data-testid="stMetricValue"] {color:#fff;font-weight:700}
+[data-testid="stMetricLabel"] p {color:#cbcddc !important;text-transform:uppercase;letter-spacing:.08em;font-size:.72rem}
+[data-testid="stMetricDelta"] {color:#bcbfd0}
+
 .stButton>button,.stDownloadButton>button {border-radius:12px;font-weight:700;border:0;background:linear-gradient(90deg,#7774ff,#a855f7);color:#fff}
 .clip-card {background:#171924;border:1px solid #292c3d;border-radius:16px;padding:.9rem;margin:.5rem 0}
 </style>
@@ -66,28 +80,14 @@ def timecode(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
-def make_thumbnail(clip: Path, at: float = 0.5) -> Path | None:
-    output = clip.with_suffix(".thumb.jpg")
-    if output.exists():
-        return output
-    command = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(max(at, 0)),
-        "-i", str(clip), "-frames:v", "1", "-q:v", "3", str(output),
-    ]
-    if subprocess.run(command, capture_output=True).returncode == 0 and output.exists():
-        return output
-    return None
-
-
 def render_clip_card(clip: Path, key: str) -> None:
-    st.markdown(f'<div class="clip-card"><b>{clip.name}</b></div>', unsafe_allow_html=True)
-    thumb = make_thumbnail(clip)
-    if thumb is not None:
-        st.image(str(thumb), use_container_width=True)
-    with st.popover("Aperçu", use_container_width=True):
-        st.video(str(clip))
+    st.video(str(clip))
+    st.caption(clip.name)
     with clip.open("rb") as handle:
-        st.download_button("Télécharger", handle, clip.name, "video/mp4", key=key)
+        st.download_button(
+            "Télécharger", handle, clip.name, "video/mp4",
+            key=key, use_container_width=True,
+        )
 
 
 # --- Phase 1 : charger une vidéo -------------------------------------------------
@@ -202,6 +202,10 @@ if duration:
         "Portion à clipper", 0.0, float(duration), (0.0, float(duration)),
         step=1.0, format="%d s",
     )
+    span = window[1] - window[0]
+    estimated = math.ceil(span / clip_length) if span > 0 else 0
+    st.metric("Clips à générer", f"≈ {estimated}")
+    st.caption(f"{clip_length} s l'unité · sur {timecode(span)} de vidéo sélectionnée")
 else:
     window = (0.0, None)
     st.caption("Durée inconnue : toute la vidéo sera traitée.")
@@ -222,13 +226,6 @@ with st.expander("Avancé"):
     encoder_options["CPU · x264"] = "cpu"
     encoder = encoder_options[st.selectbox("Accélération", list(encoder_options))]
     encoding_speed = SPEED_CHOICES[st.selectbox("Vitesse d'encodage", list(SPEED_CHOICES))]
-
-if duration:
-    span = window[1] - window[0]
-    st.info(
-        f"≈ {math.ceil(span / clip_length)} clip(s) de {clip_length} s "
-        f"sur {timecode(span)} de vidéo."
-    )
 
 if st.button("Générer les clips  ✦", use_container_width=True):
     progress_bar = st.progress(0.0)
