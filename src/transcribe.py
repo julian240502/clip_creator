@@ -13,9 +13,9 @@ import importlib.util
 import json
 import subprocess
 import tempfile
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
 
 from src.paths import TRANSCRIPTIONS_DIR
@@ -60,12 +60,44 @@ def transcription_available() -> bool:
     return importlib.util.find_spec("faster_whisper") is not None
 
 
-@lru_cache(maxsize=2)
+_model_lock = threading.Lock()
+_models: dict[tuple[str, str, str], object] = {}
+
+
 def _load_model(model: str, device: str, compute_type: str):
     """Garde le modèle en mémoire : le chargement (long) n'a lieu qu'une fois par session."""
-    from faster_whisper import WhisperModel
+    key = (model, device, compute_type)
+    with _model_lock:
+        if key not in _models:
+            from faster_whisper import WhisperModel
 
-    return WhisperModel(model, device=device, compute_type=compute_type)
+            _models[key] = WhisperModel(model, device=device, compute_type=compute_type)
+        return _models[key]
+
+
+def prewarm_model(model: str = DEFAULT_MODEL) -> None:
+    """Charge le modèle ET initialise les kernels CUDA (1re inférence).
+
+    À lancer dans un thread : masque le délai pendant que l'utilisateur règle le style.
+    """
+    if not transcription_available():
+        return
+    try:
+        whisper = _load_model(model, *_resolve_backend())
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = Path(tmp) / "warmup.wav"
+            subprocess.run(
+                [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "0.5",
+                    "-c:a", "pcm_s16le", str(wav),
+                ],
+                capture_output=True, check=True,
+            )
+            segments, _ = whisper.transcribe(str(wav), vad_filter=False)
+            list(segments)
+    except Exception:  # noqa: BLE001 - le préchauffage est best-effort
+        pass
 
 
 def _resolve_backend() -> tuple[str, str]:

@@ -5,6 +5,7 @@ import math
 import shutil
 import subprocess
 import tempfile
+import threading
 import uuid
 import zipfile
 from dataclasses import asdict, replace
@@ -23,7 +24,13 @@ from src.downloader import download_clip, probe_url
 from src.pipeline import process_video
 from src.quality import get_quality_preset
 from src.resizer import resize_clip_for_vertical
-from src.transcribe import DEFAULT_MODEL, load_transcript, transcribe, transcription_available
+from src.transcribe import (
+    DEFAULT_MODEL,
+    load_transcript,
+    prewarm_model,
+    transcribe,
+    transcription_available,
+)
 from src.video_splitter import get_video_duration, get_video_resolution
 
 st.set_page_config(page_title="Clip Creator", page_icon="✦", layout="wide")
@@ -298,6 +305,10 @@ if not captions_ready:
 elif not vertical:
     st.caption("Les sous-titres ne sont disponibles que sur l'export 9:16.")
 elif captions_on:
+    # Charge le modèle en tâche de fond pendant que l'utilisateur règle le style.
+    if not st.session_state.get("model_warming"):
+        st.session_state["model_warming"] = True
+        threading.Thread(target=prewarm_model, daemon=True).start()
     with st.container(border=True):
         template_name = st.selectbox("Style", list(TEMPLATES))
         base = TEMPLATES[template_name]
@@ -327,8 +338,8 @@ elif captions_on:
         )
         style_sig = json.dumps(asdict(captions_style), sort_keys=True)
         st.caption(
-            "1er aperçu : transcription (~15-20 s le temps de charger le modèle). "
-            "Ensuite, changer un réglage ne re-transcrit rien — le rendu prend quelques secondes."
+            "Le modèle se charge en arrière-plan. Le 1er aperçu prend quelques secondes de plus, "
+            "les suivants sont quasi instantanés."
         )
         if st.button("Aperçu du style", use_container_width=True):
             with st.spinner("Rendu de l'aperçu…"):
