@@ -16,6 +16,7 @@ from src.resizer import (
     _black_background_filter,
     _blur_background_filter,
     resize_clip_for_vertical,
+    segment_vertical,
 )
 from src.video_splitter import (
     get_video_duration,
@@ -73,6 +74,21 @@ def test_split_video_respects_source_window_and_reports_each_clip(
     assert len(clips) == 2
     assert [Path(clip) for clip in clips] == seen
     assert get_video_duration(clips[0]) == pytest.approx(1, abs=0.15)
+
+
+def test_segment_vertical_cuts_and_reframes_in_one_pass(
+    sample_video: Path, tmp_path: Path,
+) -> None:
+    seen: list[Path] = []
+    clips = segment_vertical(
+        sample_video, tmp_path / "vertical",
+        clip_length=1, window_start=0.0, window_end=3.0,
+        encoder="cpu", quality="720p", background="blur", on_clip=seen.append,
+    )
+    assert len(clips) == 3
+    assert [Path(clip) for clip in clips] == seen
+    assert get_video_resolution(clips[0]) == (720, 1280)
+    assert get_video_duration(clips[1]) == pytest.approx(1, abs=0.25)
 
 
 def test_vertical_export_preserves_landscape_video(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from src.encoder import (
@@ -10,6 +12,8 @@ from src.encoder import (
     video_encoder_args,
 )
 from src.quality import get_quality_preset
+
+ClipCallback = Callable[[Path], None]
 
 
 def _black_background_filter(width: int, height: int, *, cuda: bool) -> str:
@@ -130,3 +134,96 @@ def resize_clip_for_vertical(
 
 def resize_clip_for_tiktok(input_path: str | Path, output_path: str | Path) -> Path:
     return resize_clip_for_vertical(input_path, output_path)
+
+
+def segment_vertical(
+    input_path: str | Path,
+    output_dir: str | Path,
+    *,
+    clip_length: int,
+    window_start: float,
+    window_end: float,
+    encoder: str = "auto",
+    encoding_speed: str = "fast",
+    quality: str = "1080p",
+    background: str = "blur",
+    captions_file: str | Path | None = None,
+    on_clip: ClipCallback | None = None,
+) -> list[Path]:
+    """Découpe + format vertical en une seule passe FFmpeg (segment muxer).
+
+    La source n'est décodée qu'une fois, le graphe de filtres et l'encodeur ne
+    sont initialisés qu'une fois. `on_clip` est appelé au fil des segments écrits.
+    """
+    source, out = Path(input_path), Path(output_dir)
+    if not source.is_file():
+        raise FileNotFoundError(f"Vidéo introuvable : {source}")
+    if background not in {"blur", "black"}:
+        raise ValueError("Le fond doit être 'blur' ou 'black'.")
+    span = window_end - window_start
+    if span <= 0:
+        raise ValueError("La fenêtre sélectionnée est vide.")
+    if clip_length <= 0:
+        raise ValueError("La durée d'un clip doit être positive.")
+    out.mkdir(parents=True, exist_ok=True)
+    for stale in out.glob("clip_*.mp4"):
+        stale.unlink()
+    preset = get_quality_preset(quality)
+    width, height = preset.width, preset.height
+    resolved_encoder = resolve_video_encoder(encoder)
+
+    captions_name: str | None = None
+    if captions_file is not None:
+        captions_path = Path(captions_file)
+        if not captions_path.is_file():
+            raise FileNotFoundError(f"Sous-titres introuvables : {captions_path}")
+        captions_name = captions_path.name
+        if captions_path.parent.resolve() != out.resolve():
+            shutil.copyfile(captions_path, out / captions_name)
+
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+               "-ss", str(window_start), "-i", str(source), "-t", str(span)]
+    if background == "blur":
+        video_filter = _blur_background_filter(width, height)
+        if captions_name:
+            video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
+        command += ["-filter_complex", video_filter, "-map", "[vout]", "-map", "0:a?"]
+    else:
+        video_filter = _black_background_filter(width, height, cuda=False)
+        if captions_name:
+            video_filter += f",format=yuv420p,ass={captions_name}"
+        command += ["-vf", video_filter]
+    # IDR forcé à chaque coupe + petite tolérance pour que le muxer tranche
+    # exactement sur ces keyframes (sinon il rate la 1re coupe quand il y a de l'audio).
+    command += ["-force_key_frames", f"expr:gte(t,n_forced*{clip_length})"]
+    command += video_encoder_args(resolved_encoder, encoding_speed)
+    command += [
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+        "-f", "segment", "-segment_time", str(clip_length), "-segment_time_delta", "0.1",
+        "-reset_timestamps", "1", "-segment_start_number", "1",
+        "-segment_format", "mp4", "-segment_format_options", "movflags=+faststart",
+        "clip_%03d.mp4",
+    ]
+
+    proc = subprocess.Popen(
+        command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, cwd=str(out),
+    )
+    emitted: set[str] = set()
+    clips: list[Path] = []
+    while True:
+        finished = proc.poll() is not None
+        present = sorted(out.glob("clip_*.mp4"))
+        ready = present if finished else present[:-1]
+        for path in ready:
+            if path.name not in emitted:
+                emitted.add(path.name)
+                clips.append(path)
+                if on_clip is not None:
+                    on_clip(path)
+        if finished:
+            break
+        time.sleep(0.4)
+    stderr = proc.communicate()[1]
+    if proc.returncode != 0:
+        raise RuntimeError(stderr.strip() or "Échec du découpage vertical FFmpeg.")
+    return clips

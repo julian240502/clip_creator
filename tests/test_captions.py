@@ -8,7 +8,7 @@ from src.captions import (
     build_ass,
     write_clip_captions,
 )
-from src.resizer import resize_clip_for_vertical
+from src.resizer import resize_clip_for_vertical, segment_vertical
 from src.transcribe import Transcript, TranscriptSegment, Word
 from src.video_splitter import get_video_resolution
 
@@ -134,6 +134,23 @@ def test_pipeline_skips_captions_when_no_speech(
     assert len(clips) >= 1
     assert (Path(project_dir) / "transcript.json").is_file()
     assert not list(Path(project_dir).rglob("*.ass"))
+
+
+def test_segment_vertical_burns_one_ass_across_all_clips(
+    sample_video: Path, tmp_path: Path,
+) -> None:
+    ass = write_clip_captions(
+        _transcript(), tmp_path / "captions.ass",
+        clip_start=0.0, clip_end=3.0, width=720, height=1280,
+        style=TEMPLATES["Fondu"],
+    )
+    clips = segment_vertical(
+        sample_video, tmp_path / "v",
+        clip_length=1, window_start=0.0, window_end=3.0,
+        encoder="cpu", quality="720p", background="black", captions_file=ass,
+    )
+    assert len(clips) == 3
+    assert all(Path(clip).is_file() for clip in clips)
 
 
 def test_captions_are_burned_into_the_vertical_export(sample_video: Path, tmp_path: Path) -> None:

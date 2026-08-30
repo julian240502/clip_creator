@@ -12,7 +12,7 @@ from src.downloader import download_source
 from src.encoder import encoder_label, resolve_video_encoder
 from src.paths import DATA_DIR, SOURCE_CACHE_DIR
 from src.quality import get_quality_preset
-from src.resizer import resize_clip_for_vertical
+from src.resizer import segment_vertical
 from src.transcribe import DEFAULT_MODEL
 from src.video_splitter import (
     get_video_duration,
@@ -100,37 +100,35 @@ def process_video(
         ]
         report(1.0, "Exports terminés")
         return project_dir, landscape
-    # Découpage et conversion verticale sont réalisés ensemble : chaque image
-    # n'est encodée qu'une fois au lieu de subir deux passes successives.
-    span = window_end - window_start
-    clip_count = math.ceil(span / clip_length)
-    vertical_dir, exports = project_dir / "vertical", []
+    # Découpage + format vertical en UNE passe : la source n'est décodée qu'une
+    # fois, l'encodeur et libass ne sont initialisés qu'une fois.
+    clip_count = math.ceil((window_end - window_start) / clip_length)
     report(0.25, f"Découpage + format vertical via {encoder_label(resolved_encoder)}…")
-    for offset in range(clip_count):
-        start = window_start + offset * clip_length
-        length = min(clip_length, window_end - start)
-        report(
-            0.25 + 0.7 * (offset / max(clip_count, 1)),
-            f"Export {offset + 1}/{clip_count} · {encoder_label(resolved_encoder)}…",
-        )
-        output = vertical_dir / f"clip_{offset + 1:03d}.mp4"
-        clip_captions = None
-        if captions_style is not None and transcript is not None:
-            from src.captions import write_clip_captions
+    captions_file = None
+    if captions_style is not None and transcript is not None:
+        from src.captions import write_clip_captions
 
-            clip_captions = write_clip_captions(
-                transcript, output.with_suffix(".ass"),
-                clip_start=start, clip_end=start + length,
-                width=quality.width, height=quality.height, style=captions_style,
-            )
-        clip_path = resize_clip_for_vertical(
-            source, output, encoder=encoder,
-            encoding_speed=encoding_speed, quality=quality.key,
-            background=vertical_background,
-            start=start, duration=length,
-            captions_file=clip_captions,
+        captions_file = write_clip_captions(
+            transcript, project_dir / "vertical" / "captions.ass",
+            clip_start=window_start, clip_end=window_end,
+            width=quality.width, height=quality.height, style=captions_style,
         )
-        exports.append(clip_path)
-        notify_clip(clip_path)
+    done = {"n": 0}
+
+    def _on_segment(path: Path) -> None:
+        done["n"] += 1
+        report(
+            0.25 + 0.7 * (done["n"] / max(clip_count, 1)),
+            f"Clip {done['n']}/{clip_count}…",
+        )
+        notify_clip(path)
+
+    exports = segment_vertical(
+        source, project_dir / "vertical",
+        clip_length=clip_length, window_start=window_start, window_end=window_end,
+        encoder=encoder, encoding_speed=encoding_speed, quality=quality.key,
+        background=vertical_background, captions_file=captions_file,
+        on_clip=_on_segment,
+    )
     report(1.0, "Exports terminés")
     return project_dir, exports
