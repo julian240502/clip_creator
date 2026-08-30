@@ -17,7 +17,12 @@ from src.resizer import (
     _blur_background_filter,
     resize_clip_for_vertical,
 )
-from src.video_splitter import get_video_duration, split_video
+from src.video_splitter import (
+    get_video_duration,
+    get_video_resolution,
+    resolve_source_window,
+    split_video,
+)
 
 
 @pytest.fixture()
@@ -38,6 +43,30 @@ def test_split_video_is_precise(sample_video: Path, tmp_path: Path) -> None:
     assert len(clips) == 2
     assert get_video_duration(clips[0]) == pytest.approx(2, abs=0.15)
     assert get_video_duration(clips[1]) == pytest.approx(1, abs=0.15)
+
+
+def test_get_video_resolution_reads_stream_dimensions(sample_video: Path) -> None:
+    assert get_video_resolution(sample_video) == (640, 360)
+
+
+def test_resolve_source_window_clamps_and_rejects_empty() -> None:
+    assert resolve_source_window(10.0, None, None) == (0.0, 10.0)
+    assert resolve_source_window(10.0, 2.0, 99.0) == (2.0, 10.0)
+    with pytest.raises(ValueError):
+        resolve_source_window(10.0, 8.0, 5.0)
+
+
+def test_split_video_respects_source_window_and_reports_each_clip(
+    sample_video: Path, tmp_path: Path,
+) -> None:
+    seen: list[Path] = []
+    clips = split_video(
+        sample_video, 1, tmp_path / "clips", encoder="cpu",
+        source_start=1.0, source_end=3.0, on_clip=seen.append,
+    )
+    assert len(clips) == 2
+    assert [Path(clip) for clip in clips] == seen
+    assert get_video_duration(clips[0]) == pytest.approx(1, abs=0.15)
 
 
 def test_vertical_export_preserves_landscape_video(

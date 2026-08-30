@@ -22,6 +22,31 @@ def _validate_url(url: str) -> str:
     return value
 
 
+def probe_url(video_url: str) -> dict:
+    """Lit les métadonnées d'une URL sans télécharger la vidéo."""
+    url = _validate_url(video_url)
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+    }
+    with YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not info:
+        raise RuntimeError("Impossible de lire les informations de cette URL.")
+    duration = info.get("duration")
+    return {
+        "title": info.get("title") or url,
+        "duration": float(duration) if duration else None,
+        "width": info.get("width"),
+        "height": info.get("height"),
+        "thumbnail": info.get("thumbnail"),
+        "uploader": info.get("uploader"),
+        "webpage_url": info.get("webpage_url") or url,
+    }
+
+
 def download_video(
     video_url: str,
     output_dir: str | Path | None = None,

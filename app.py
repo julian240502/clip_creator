@@ -1,141 +1,268 @@
 from __future__ import annotations
 
+import math
 import shutil
+import subprocess
 import tempfile
+import uuid
 import zipfile
 from pathlib import Path
 
 import streamlit as st
 
-from src.encoder import (
-    available_hardware_encoders,
-    cuda_scaling_available,
-    encoder_label,
-    resolve_video_encoder,
-)
+from src.downloader import probe_url
+from src.encoder import available_hardware_encoders, encoder_label, resolve_video_encoder
 from src.pipeline import process_video
-from src.quality import get_quality_preset
-
+from src.video_splitter import get_video_duration, get_video_resolution
 
 st.set_page_config(page_title="Clip Creator", page_icon="✦", layout="wide")
-st.markdown("""
+st.markdown(
+    """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
-html, body, [class*="css"] {font-family:'DM Sans',sans-serif}
+html, body, [class*="css"] {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
 .stApp {background:radial-gradient(circle at 15% 0%,#20234b 0,#0d0e18 38%,#090a10 100%);color:#f7f7fb}
-.hero {padding:2.4rem 0 1.6rem}.eyebrow {color:#a6a9ff;font-weight:700;letter-spacing:.13em;text-transform:uppercase;font-size:.75rem}
-.hero h1 {font-size:4rem;line-height:1;margin:.5rem 0;background:linear-gradient(90deg,#fff,#a9adff);-webkit-background-clip:text;color:transparent}
-.hero p {font-size:1.15rem;color:#a9abba;max-width:690px}
-[data-testid="stForm"] {background:rgba(25,27,44,.82);border:1px solid #343751;border-radius:22px;padding:1.5rem;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.hero {padding:2rem 0 1.2rem}
+.eyebrow {color:#a6a9ff;font-weight:700;letter-spacing:.13em;text-transform:uppercase;font-size:.75rem}
+.hero h1 {font-size:3rem;line-height:1;margin:.4rem 0;background:linear-gradient(90deg,#fff,#a9adff);-webkit-background-clip:text;color:transparent}
+.hero p {font-size:1.05rem;color:#a9abba;max-width:640px}
 [data-testid="stMetric"] {background:#171924;border:1px solid #292c3d;padding:1rem;border-radius:16px}
-.stButton>button,.stDownloadButton>button {border-radius:12px;font-weight:700;border:0;background:linear-gradient(90deg,#7774ff,#a855f7);color:white}
-.clip-card {background:#171924;border:1px solid #292c3d;border-radius:16px;padding:1rem;margin:.7rem 0}
+.stButton>button,.stDownloadButton>button {border-radius:12px;font-weight:700;border:0;background:linear-gradient(90deg,#7774ff,#a855f7);color:#fff}
+.clip-card {background:#171924;border:1px solid #292c3d;border-radius:16px;padding:.9rem;margin:.5rem 0}
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-st.markdown("""<section class="hero"><div class="eyebrow">Studio vidéo local</div><h1>Clip Creator ✦</h1><p>Transformez une vidéo longue en clips nets, verticaux et prêts à finaliser dans CapCut ou Camtasia.</p></section>""", unsafe_allow_html=True)
+WORK_ROOT = Path(tempfile.gettempdir()) / "clip-creator"
+QUALITY_CHOICES = {
+    "Full HD · 1080p — recommandé": "1080p",
+    "HD · 720p — plus rapide": "720p",
+    "4K · 2160p — meilleure qualité": "4k",
+}
+BACKGROUND_CHOICES = {"Fond vidéo flouté — recommandé": "blur", "Bandes noires": "black"}
+SPEED_CHOICES = {"Rapide — recommandé": "fast", "Équilibrée": "balanced", "Qualité maximale": "quality"}
 
-with st.sidebar:
-    st.header("Réglages d'export")
-    clip_length = st.slider("Durée d'un clip", 10, 180, 30, 5, format="%d sec")
-    quality_labels = {
-        "Full HD · 1080p — recommandé": "1080p",
-        "HD · 720p — plus rapide": "720p",
-        "4K · 2160p — meilleure qualité": "4k",
-    }
-    quality_label = st.selectbox("Qualité", list(quality_labels))
-    export_quality = quality_labels[quality_label]
-    quality = get_quality_preset(export_quality)
-    vertical = st.toggle("Exporter en 9:16", value=True)
-    if vertical:
-        background_options = {
-            "Fond vidéo flouté — recommandé": "blur",
-            "Bandes noires": "black",
-        }
-        background_choice = st.selectbox("Arrière-plan vertical", list(background_options))
-        vertical_background = background_options[background_choice]
-        st.caption("La vidéo paysage nette reste entièrement visible au premier plan.")
-    else:
-        vertical_background = "blur"
-    detected_encoder = resolve_video_encoder("auto")
-    automatic_label = f"Automatique · {encoder_label(detected_encoder)}"
-    encoder_preferences = {
-        "h264_nvenc": "nvidia",
-        "h264_qsv": "intel",
-        "h264_amf": "amd",
-    }
-    encoder_options = {automatic_label: "auto"}
-    for hardware_encoder in available_hardware_encoders():
-        encoder_options[encoder_label(hardware_encoder)] = encoder_preferences[hardware_encoder]
-    encoder_options["CPU · x264"] = "cpu"
-    encoder_choice = st.selectbox("Accélération", list(encoder_options))
-    encoder = encoder_options[encoder_choice]
-    speed_options = {
-        "Rapide — recommandé": "fast",
-        "Équilibrée": "balanced",
-        "Qualité maximale": "quality",
-    }
-    speed_choice = st.selectbox("Vitesse d'encodage", list(speed_options))
-    encoding_speed = speed_options[speed_choice]
-    st.divider()
-    dimensions = f"{quality.width} × {quality.height}" if vertical else f"source ≤ {quality.source_max_height}p"
-    active_encoder = resolve_video_encoder(encoder)
-    cuda_available = vertical_background == "black" and cuda_scaling_available()
-    cuda_active = vertical and active_encoder == "h264_nvenc" and cuda_available
-    cuda_label = " · redimensionnement CUDA" if cuda_active else ""
-    st.caption(f"{dimensions} · H.264 · AAC · {encoder_label(active_encoder)}{cuda_label}")
-    if vertical and vertical_background == "blur" and active_encoder == "h264_nvenc":
-        st.caption("Fond flouté en mode compatible · encodage NVIDIA NVENC.")
-    if export_quality == "4k":
-        st.caption("La 4K produit des fichiers plus lourds et demande plus de temps d'encodage.")
 
-with st.form("creator"):
-    source_type = st.radio("Source", ["Lien vidéo", "Fichier local"], horizontal=True)
-    url = st.text_input("URL de la vidéo", placeholder="https://www.youtube.com/watch?v=…", disabled=source_type != "Lien vidéo")
-    uploaded = st.file_uploader("Déposer une vidéo", type=["mp4", "mov", "mkv", "webm"], disabled=source_type != "Fichier local")
-    submitted = st.form_submit_button("Créer mes clips  ✦", use_container_width=True)
+def session_dir() -> Path:
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = uuid.uuid4().hex[:12]
+    path = WORK_ROOT / st.session_state.session_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
-if submitted:
-    if source_type == "Lien vidéo" and not url.strip():
-        st.warning("Ajoutez une URL vidéo.")
-        st.stop()
-    if source_type == "Fichier local" and uploaded is None:
-        st.warning("Sélectionnez une vidéo.")
-        st.stop()
-    progress_bar, status = st.progress(0), st.empty()
-    temp_dir = Path(tempfile.mkdtemp(prefix="clip-creator-"))
-    try:
-        upload_path = None
-        if uploaded is not None:
-            upload_path = temp_dir / Path(uploaded.name).name
-            with upload_path.open("wb") as handle:
-                handle.write(uploaded.getbuffer())
-        def update_progress(value: float, message: str) -> None:
-            progress_bar.progress(value)
-            status.caption(message)
-        project_dir, clips = process_video(
-            url=url.strip() or None, uploaded_path=upload_path, clip_length=clip_length,
-            vertical=vertical, encoder=encoder,
-            export_quality=export_quality, encoding_speed=encoding_speed,
-            vertical_background=vertical_background,
-            progress=update_progress,
-        )
-        st.success(f"{len(clips)} clip(s) prêt(s) pour le montage.")
-        archive_path = project_dir / "clip-creator-exports.zip"
-        # Les MP4 sont déjà compressés : les stocker évite une seconde passe CPU inutile.
+
+def reset_source() -> None:
+    for key in ("source", "clips", "project_dir"):
+        st.session_state.pop(key, None)
+    shutil.rmtree(session_dir(), ignore_errors=True)
+
+
+def timecode(seconds: float) -> str:
+    total = int(seconds)
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+def make_thumbnail(clip: Path, at: float = 0.5) -> Path | None:
+    output = clip.with_suffix(".thumb.jpg")
+    if output.exists():
+        return output
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(max(at, 0)),
+        "-i", str(clip), "-frames:v", "1", "-q:v", "3", str(output),
+    ]
+    if subprocess.run(command, capture_output=True).returncode == 0 and output.exists():
+        return output
+    return None
+
+
+def render_clip_card(clip: Path, key: str) -> None:
+    st.markdown(f'<div class="clip-card"><b>{clip.name}</b></div>', unsafe_allow_html=True)
+    thumb = make_thumbnail(clip)
+    if thumb is not None:
+        st.image(str(thumb), use_container_width=True)
+    with st.popover("Aperçu", use_container_width=True):
+        st.video(str(clip))
+    with clip.open("rb") as handle:
+        st.download_button("Télécharger", handle, clip.name, "video/mp4", key=key)
+
+
+# --- Phase 1 : charger une vidéo -------------------------------------------------
+if "source" not in st.session_state:
+    st.markdown(
+        """<section class="hero"><div class="eyebrow">Studio vidéo local</div>
+        <h1>Clip Creator ✦</h1>
+        <p>Chargez une vidéo, prévisualisez-la, choisissez la portion à traiter,
+        puis générez des clips verticaux prêts à finaliser dans CapCut ou Camtasia.</p></section>""",
+        unsafe_allow_html=True,
+    )
+    tab_link, tab_file = st.tabs(["Lien vidéo", "Fichier local"])
+    with tab_link:
+        url = st.text_input("URL de la vidéo", placeholder="https://www.youtube.com/watch?v=…")
+        if st.button("Charger la vidéo", key="load_url", use_container_width=True):
+            if not url.strip():
+                st.warning("Ajoutez une URL vidéo.")
+            else:
+                with st.spinner("Lecture des informations…"):
+                    try:
+                        meta = probe_url(url.strip())
+                        st.session_state.source = {"kind": "url", "ref": meta["webpage_url"], **meta}
+                        st.rerun()
+                    except Exception as exc:  # noqa: BLE001 - message affiché tel quel
+                        st.error(f"Impossible de charger cette URL : {exc}")
+    with tab_file:
+        uploaded = st.file_uploader("Déposer une vidéo", type=["mp4", "mov", "mkv", "webm"])
+        if uploaded is not None and st.button("Charger la vidéo", key="load_file", use_container_width=True):
+            destination = session_dir() / Path(uploaded.name).name
+            destination.write_bytes(uploaded.getbuffer())
+            try:
+                duration = get_video_duration(destination)
+                width, height = get_video_resolution(destination)
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Fichier vidéo illisible : {exc}")
+                st.stop()
+            st.session_state.source = {
+                "kind": "file", "ref": str(destination), "path": str(destination),
+                "title": destination.stem, "duration": duration,
+                "width": width, "height": height, "thumbnail": None,
+            }
+            st.rerun()
+    st.stop()
+
+source = st.session_state.source
+
+# --- Phase 3 : clips générés --------------------------------------------------
+if st.session_state.get("clips"):
+    clips = [Path(item) for item in st.session_state.clips]
+    st.markdown('<section class="hero"><h1>Clips prêts ✦</h1></section>', unsafe_allow_html=True)
+    st.caption(f"{len(clips)} clip(s) · {source['title']}")
+
+    project_dir = st.session_state.get("project_dir")
+    if project_dir:
+        archive_path = Path(project_dir) / "clip-creator-exports.zip"
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
             for clip in clips:
                 archive.write(clip, clip.name)
         with archive_path.open("rb") as archive:
-            st.download_button("Télécharger tous les clips (.zip)", archive, archive_path.name, "application/zip", use_container_width=True)
-        st.subheader("Aperçu des exports")
-        for clip in clips:
-            with st.container():
-                st.markdown(f'<div class="clip-card"><b>{clip.name}</b></div>', unsafe_allow_html=True)
-                st.video(str(clip))
-                with clip.open("rb") as video:
-                    st.download_button(f"Télécharger {clip.name}", video, clip.name, "video/mp4", key=str(clip))
-    except Exception as exc:
+            st.download_button(
+                "Télécharger tous les clips (.zip)", archive, "clips.zip",
+                "application/zip", use_container_width=True,
+            )
+
+    columns = st.columns(3)
+    for index, clip in enumerate(clips):
+        with columns[index % 3]:
+            render_clip_card(clip, key=f"clip-{index}")
+
+    left, right = st.columns(2)
+    if left.button("Régler à nouveau", use_container_width=True):
+        st.session_state.pop("clips", None)
+        st.session_state.pop("project_dir", None)
+        st.rerun()
+    if right.button("Nouvelle vidéo", use_container_width=True):
+        reset_source()
+        st.rerun()
+    st.stop()
+
+# --- Phase 2 : prévisualiser et régler --------------------------------------
+st.markdown('<section class="hero"><h1>Clip Creator ✦</h1></section>', unsafe_allow_html=True)
+preview, meta = st.columns([2, 1])
+with preview:
+    try:
+        st.video(source["ref"])
+    except Exception:  # noqa: BLE001 - lecteur indisponible pour cette source
+        if source.get("thumbnail"):
+            st.image(source["thumbnail"], use_container_width=True)
+        else:
+            st.info("Aperçu vidéo indisponible pour cette source.")
+with meta:
+    st.markdown(f"**{source['title']}**")
+    facts = []
+    duration = source.get("duration")
+    if duration:
+        facts.append(timecode(duration))
+    if source.get("width") and source.get("height"):
+        facts.append(f"{source['width']} × {source['height']}")
+        facts.append("paysage" if source["width"] >= source["height"] else "portrait")
+    st.caption(" · ".join(facts) or "Métadonnées indisponibles")
+    if source.get("uploader"):
+        st.caption(source["uploader"])
+    if st.button("Changer de vidéo", use_container_width=True):
+        reset_source()
+        st.rerun()
+
+st.subheader("Réglages")
+clip_length = st.slider("Durée d'un clip", 10, 180, 30, 5, format="%d sec")
+
+if duration:
+    window = st.slider(
+        "Portion à clipper", 0.0, float(duration), (0.0, float(duration)),
+        step=1.0, format="%d s",
+    )
+else:
+    window = (0.0, None)
+    st.caption("Durée inconnue : toute la vidéo sera traitée.")
+
+quality_key = QUALITY_CHOICES[st.selectbox("Qualité", list(QUALITY_CHOICES))]
+vertical = st.toggle("Exporter en 9:16", value=True)
+background = "blur"
+if vertical:
+    background = BACKGROUND_CHOICES[st.selectbox("Arrière-plan vertical", list(BACKGROUND_CHOICES))]
+    st.caption("La vidéo paysage nette reste entièrement visible au premier plan.")
+
+with st.expander("Avancé"):
+    detected = resolve_video_encoder("auto")
+    encoder_options = {f"Automatique · {encoder_label(detected)}": "auto"}
+    hardware_names = {"h264_nvenc": "nvidia", "h264_qsv": "intel", "h264_amf": "amd"}
+    for hardware_encoder in available_hardware_encoders():
+        encoder_options[encoder_label(hardware_encoder)] = hardware_names[hardware_encoder]
+    encoder_options["CPU · x264"] = "cpu"
+    encoder = encoder_options[st.selectbox("Accélération", list(encoder_options))]
+    encoding_speed = SPEED_CHOICES[st.selectbox("Vitesse d'encodage", list(SPEED_CHOICES))]
+
+if duration:
+    span = window[1] - window[0]
+    st.info(
+        f"≈ {math.ceil(span / clip_length)} clip(s) de {clip_length} s "
+        f"sur {timecode(span)} de vidéo."
+    )
+
+if st.button("Générer les clips  ✦", use_container_width=True):
+    progress_bar = st.progress(0.0)
+    status = st.empty()
+    live = st.container()
+    live_columns = live.columns(3)
+    counter = {"n": 0}
+
+    def on_progress(value: float, message: str) -> None:
+        progress_bar.progress(min(max(value, 0.0), 1.0))
+        status.caption(message)
+
+    def on_clip(path: Path) -> None:
+        with live_columns[counter["n"] % 3]:
+            render_clip_card(Path(path), key=f"live-{counter['n']}")
+        counter["n"] += 1
+
+    try:
+        project_dir, clips = process_video(
+            url=source["ref"] if source["kind"] == "url" else None,
+            uploaded_path=source["path"] if source["kind"] == "file" else None,
+            clip_length=clip_length,
+            vertical=vertical,
+            encoder=encoder,
+            export_quality=quality_key,
+            encoding_speed=encoding_speed,
+            vertical_background=background,
+            source_start=window[0],
+            source_end=window[1],
+            on_clip=on_clip,
+            progress=on_progress,
+        )
+        st.session_state.project_dir = str(project_dir)
+        st.session_state.clips = [str(clip) for clip in clips]
+        st.rerun()
+    except Exception as exc:  # noqa: BLE001 - message affiché tel quel
         st.error(f"Le traitement a échoué : {exc}")
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)

@@ -2,10 +2,14 @@
 
 Application locale pour télécharger ou importer une vidéo, la découper en clips et produire des exports verticaux prêts pour **CapCut** ou **Camtasia**.
 
+Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteur intégré, titre, durée, résolution), on **choisit la portion à traiter** et les réglages, puis on **génère les clips**, affichés au fur et à mesure avec une vignette et un aperçu à la demande.
+
 ## Fonctionnalités
 
 - téléchargement via une URL prise en charge par `yt-dlp` ;
 - import de fichiers MP4, MOV, MKV et WebM ;
+- prévisualisation de la source avant traitement, avec métadonnées ;
+- sélection d'une portion de la vidéo à clipper et estimation du nombre de clips ;
 - découpage précis avec une durée configurable ;
 - export vertical sans déformation en 720p, 1080p ou 4K ;
 - conservation intégrale de la vidéo paysage en 9:16 ;

@@ -12,9 +12,14 @@ from src.encoder import encoder_label, resolve_video_encoder
 from src.paths import DATA_DIR
 from src.quality import get_quality_preset
 from src.resizer import resize_clip_for_vertical
-from src.video_splitter import get_video_duration, split_video
+from src.video_splitter import (
+    get_video_duration,
+    resolve_source_window,
+    split_video,
+)
 
 ProgressCallback = Callable[[float, str], None]
+ClipCallback = Callable[[Path], None]
 
 
 def _project_name(name: str) -> str:
@@ -28,10 +33,14 @@ def process_video(
     encoder: str = "auto", export_quality: str = "1080p",
     encoding_speed: str = "balanced",
     vertical_background: str = "blur",
+    source_start: float | None = None,
+    source_end: float | None = None,
+    on_clip: ClipCallback | None = None,
     progress: ProgressCallback | None = None,
 ) -> tuple[Path, list[Path]]:
     """Exécute le pipeline et renvoie le dossier projet et les exports finaux."""
     report = progress or (lambda _value, _message: None)
+    notify_clip = on_clip or (lambda _path: None)
     if bool(url) == bool(uploaded_path):
         raise ValueError("Fournissez une URL ou un fichier, mais pas les deux.")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -51,37 +60,42 @@ def process_video(
         source = source_dir / incoming.name
         shutil.copy2(incoming, source)
     resolved_encoder = resolve_video_encoder(encoder)
+    window_start, window_end = resolve_source_window(
+        get_video_duration(source), source_start, source_end
+    )
     if not vertical:
         report(0.25, f"Découpage via {encoder_label(resolved_encoder)}…")
         landscape = [
             Path(item) for item in split_video(
                 source, clip_length, project_dir / "clips", encoder=encoder,
                 encoding_speed=encoding_speed,
+                source_start=window_start, source_end=window_end,
+                on_clip=notify_clip,
             )
         ]
         report(1.0, "Exports terminés")
         return project_dir, landscape
     # Découpage et conversion verticale sont réalisés ensemble : chaque image
     # n'est encodée qu'une fois au lieu de subir deux passes successives.
-    duration = get_video_duration(source)
-    clip_count = math.ceil(duration / clip_length)
+    span = window_end - window_start
+    clip_count = math.ceil(span / clip_length)
     vertical_dir, exports = project_dir / "vertical", []
     report(0.25, f"Découpage + format vertical via {encoder_label(resolved_encoder)}…")
     for offset in range(clip_count):
-        start = offset * clip_length
-        length = min(clip_length, duration - start)
+        start = window_start + offset * clip_length
+        length = min(clip_length, window_end - start)
         report(
             0.25 + 0.7 * (offset / max(clip_count, 1)),
             f"Export {offset + 1}/{clip_count} · {encoder_label(resolved_encoder)}…",
         )
         output = vertical_dir / f"clip_{offset + 1:03d}.mp4"
-        exports.append(
-            resize_clip_for_vertical(
-                source, output, encoder=encoder,
-                encoding_speed=encoding_speed, quality=quality.key,
-                background=vertical_background,
-                start=start, duration=length,
-            )
+        clip_path = resize_clip_for_vertical(
+            source, output, encoder=encoder,
+            encoding_speed=encoding_speed, quality=quality.key,
+            background=vertical_background,
+            start=start, duration=length,
         )
+        exports.append(clip_path)
+        notify_clip(clip_path)
     report(1.0, "Exports terminés")
     return project_dir, exports
