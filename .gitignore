@@ -6,4 +6,6 @@ data/
 *.mp3
 *.srt
 venv/
+.venv/
+.test-artifacts/
 venvSchool/

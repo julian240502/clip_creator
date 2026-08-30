@@ -1,41 +1,44 @@
-import os
-import ffmpeg
+from __future__ import annotations
 
-def split_video(video_path, clip_length, output_dir):
-    """
-    Découpe une vidéo en plusieurs clips de durée fixe.
+import json
+import math
+import subprocess
+from pathlib import Path
 
-    Args:
-        video_path (str): Chemin de la vidéo source.
-        clip_length (int): Durée de chaque clip en secondes.
-        output_dir (str): Répertoire où les clips seront sauvegardés.
 
-    Returns:
-        list: Liste des chemins des clips générés.
-    """
-    os.makedirs(output_dir, exist_ok=True)
+def get_video_duration(video_path: str | Path) -> float:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(video_path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "Impossible d'analyser la vidéo.")
+    try:
+        return float(json.loads(result.stdout)["format"]["duration"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Durée vidéo illisible.") from exc
 
-    # Obtenir les informations de la vidéo
-    video_info = ffmpeg.probe(video_path)
-    duration = float(video_info['format']['duration'])
 
+def split_video(video_path: str | Path, clip_length: int, output_dir: str | Path) -> list[str]:
+    """Découpe précisément une vidéo avec un encodage compatible éditeurs mobiles."""
+    source, destination = Path(video_path), Path(output_dir)
+    if not source.is_file():
+        raise FileNotFoundError(f"Vidéo introuvable : {source}")
+    if clip_length <= 0:
+        raise ValueError("La durée d'un clip doit être positive.")
+    destination.mkdir(parents=True, exist_ok=True)
+    duration = get_video_duration(source)
     clips = []
-    start_time = 0
-    clip_num = 1
-
-    # Découpage dynamique
-    while start_time < duration:
-        end_time = min(start_time + clip_length, duration)
-        output_path = os.path.join(output_dir, f"clip_{clip_num:03d}.mp4")
-
-        (
-            ffmpeg
-            .input(video_path, ss=start_time, to=end_time)
-            .output(output_path, c="copy")
-            .run(overwrite_output=True)
-        )
-        clips.append(output_path)
-        start_time += clip_length
-        clip_num += 1
-
+    for index in range(math.ceil(duration / clip_length)):
+        start, length = index * clip_length, min(clip_length, duration - index * clip_length)
+        output_path = destination / f"clip_{index + 1:03d}.mp4"
+        command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(start),
+            "-i", str(source), "-t", str(length), "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"Échec du clip {index + 1}.")
+        clips.append(str(output_path))
     return clips

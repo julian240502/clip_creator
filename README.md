@@ -1,48 +1,51 @@
-Date début de projet : 15/01/2025
+# Clip Creator ✦
 
-# Clip Creator
-
-installer ffmpeg avec winget et pip
-```bash
-winget install ffmpeg 
-```
-## Description
-Clip Creator est un outil pour créer des clips vidéo à partir de séquences brutes. Il permet de découper, éditer et assembler des vidéos facilement et rapidement.
+Application locale pour télécharger ou importer une vidéo, la découper en clips et produire des exports verticaux prêts pour **CapCut** ou **Camtasia**.
 
 ## Fonctionnalités
-- Téléchargement de vidéos [OK]
-- Sous-titre des vidéos [OK]
-- Découpage en Clips pour des formats courts [OK]
-- Optimisation pour TikTok/Shorts : [1/2]<br/> 
-    - Redimensionnement [OK]<br/> 
-    - Effet visuel de sous-titres / Gameplay(sous la video) [en cours]
-## Next step
-- Génération de titres et de hashtag
-- Automatisation de Publication sur les plateformes.
-- Analyse des Performances pour des itérations futures.
-- Exportation en différents formats 
 
-## Framework utilisé
-- yt-dlp : pour le download <br/>
-- ffmpeg : ajouts de sous-ttire 
+- téléchargement via une URL prise en charge par `yt-dlp` ;
+- import de fichiers MP4, MOV, MKV et WebM ;
+- découpage précis avec une durée configurable ;
+- export vertical 1080 × 1920 sans déformation ;
+- choix entre recadrage plein écran et conservation de l'image entière ;
+- aperçu et téléchargement individuel ou groupé en ZIP ;
+- un dossier distinct par traitement dans `data/projects/`.
+
+Les sous-titres ne sont volontairement pas intégrés : ils sont ajoutés ensuite dans CapCut ou Camtasia.
+
+## Prérequis
+
+- Python 3.10 ou plus récent ;
+- `ffmpeg` et `ffprobe` disponibles dans le `PATH`.
+
+Sous Windows :
+
+```powershell
+winget install Gyan.FFmpeg
+```
 
 ## Installation
-Clonez le dépôt et installez les dépendances :
+
 ```bash
-git clone https://github.com/votre-utilisateur/clip_creator.git
+git clone https://github.com/julian240502/clip_creator.git
 cd clip_creator
-npm install
+python -m venv .venv
 ```
 
-## Utilisation
-Pour utiliser Clip Creator, exécutez la commande suivante :
+Activez l'environnement (`.venv\\Scripts\\activate` sous Windows ou `source .venv/bin/activate` sous macOS/Linux), puis :
+
 ```bash
-npm start
+python -m pip install -r requirements.txt
+python main.py
 ```
 
-## Licence
-Ce projet est sous licence MIT. Voir le fichier [LICENSE](LICENSE) pour plus de détails.
+L'interface s'ouvre normalement sur `http://localhost:8501`.
 
-## Auteurs
-- Julian AKUESON - Créateur et Mainteneur Principal
+## Tests
 
+```bash
+pytest
+```
+
+Les tests génèrent leurs propres médias avec FFmpeg et ne téléchargent aucune vidéo.
