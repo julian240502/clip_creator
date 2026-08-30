@@ -2,17 +2,28 @@ from __future__ import annotations
 
 import math
 import shutil
+import subprocess
 import tempfile
 import uuid
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import streamlit as st
 
-from src.downloader import probe_url
+from src.captions import (
+    CAPTION_FONTS,
+    CAPTION_MODES,
+    CAPTION_POSITIONS,
+    TEMPLATES,
+    write_clip_captions,
+)
+from src.downloader import download_clip, probe_url
 from src.encoder import available_hardware_encoders, encoder_label, resolve_video_encoder
 from src.pipeline import process_video
-from src.transcribe import transcription_available
+from src.quality import get_quality_preset
+from src.resizer import resize_clip_for_vertical
+from src.transcribe import DEFAULT_MODEL, transcribe, transcription_available
 from src.video_splitter import get_video_duration, get_video_resolution
 
 st.set_page_config(page_title="Clip Creator", page_icon="✦", layout="wide")
@@ -69,7 +80,7 @@ def session_dir() -> Path:
 
 
 def reset_source() -> None:
-    for key in ("source", "clips", "project_dir"):
+    for key in ("source", "clips", "project_dir", "style_preview"):
         st.session_state.pop(key, None)
     shutil.rmtree(session_dir(), ignore_errors=True)
 
@@ -89,6 +100,42 @@ def render_clip_card(clip: Path, key: str) -> None:
             "Télécharger", handle, clip.name, "video/mp4",
             key=key, use_container_width=True,
         )
+
+
+def _preview_source(source: dict, at: float, seconds: float = 4.0) -> Path:
+    """Prépare un court extrait local (téléchargé ou coupé) pour l'aperçu de style."""
+    preview_dir = session_dir() / "preview"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    if source["kind"] == "url":
+        return Path(download_clip(source["ref"], preview_dir, at, at + seconds, max_height=480))
+    clip = preview_dir / "preview_source.mp4"
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", str(at), "-i", source["path"], "-t", str(seconds),
+        "-c", "copy", str(clip),
+    ]
+    if subprocess.run(command, capture_output=True).returncode != 0 or not clip.is_file():
+        command[-2:-1] = ["-c:v", "libx264", "-c:a", "aac"]  # repli si copy impossible
+        subprocess.run(command, capture_output=True, check=True)
+    return clip
+
+
+def render_style_preview(source: dict, at: float, style, quality_key: str, background: str) -> Path:
+    short = _preview_source(source, at)
+    duration = min(4.0, get_video_duration(short))
+    quality = get_quality_preset(quality_key)
+    transcript = transcribe(short, model=DEFAULT_MODEL, cache_dir=session_dir())
+    ass = write_clip_captions(
+        transcript, session_dir() / "preview" / "preview.ass",
+        clip_start=0.0, clip_end=duration,
+        width=quality.width, height=quality.height, style=style,
+    )
+    output = session_dir() / "preview" / "preview.mp4"
+    resize_clip_for_vertical(
+        short, output, quality=quality_key, background=background,
+        start=0.0, duration=duration, encoding_speed="fast", captions_file=ass,
+    )
+    return output
 
 
 # --- Phase 1 : charger une vidéo -------------------------------------------------
@@ -226,14 +273,57 @@ if vertical:
     background = BACKGROUND_CHOICES[st.selectbox("Arrière-plan vertical", list(BACKGROUND_CHOICES))]
     st.caption("La vidéo paysage nette reste entièrement visible au premier plan.")
 
-can_transcribe = transcription_available()
-transcribe = st.toggle(
-    "Transcrire la vidéo (base des sous-titres)", value=False, disabled=not can_transcribe,
+captions_ready = transcription_available()
+captions_on = st.toggle(
+    "Sous-titres incrustés", value=False, disabled=not (captions_ready and vertical),
 )
-if not can_transcribe:
+captions_style = None
+if not captions_ready:
     st.caption("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
-elif transcribe:
-    st.caption("Ajoute ~1-3 min au traitement. Résultat mis en cache et réutilisé.")
+elif not vertical:
+    st.caption("Les sous-titres ne sont disponibles que sur l'export 9:16.")
+elif captions_on:
+    with st.container(border=True):
+        template_name = st.selectbox("Style", list(TEMPLATES))
+        base = TEMPLATES[template_name]
+        col_a, col_b, col_c = st.columns(3)
+        font = col_a.selectbox(
+            "Police", CAPTION_FONTS,
+            index=CAPTION_FONTS.index(base.font) if base.font in CAPTION_FONTS else 0,
+        )
+        font_size = col_b.slider("Taille", 32, 130, base.font_size, 2)
+        position_label = col_c.selectbox(
+            "Position", list(CAPTION_POSITIONS),
+            index=list(CAPTION_POSITIONS.values()).index(base.position),
+        )
+        col_d, col_e = st.columns(2)
+        primary_color = col_d.color_picker("Couleur du texte", base.primary_color)
+        highlight_color = col_e.color_picker("Couleur du mot actif", base.highlight_color)
+        mode_label = st.selectbox(
+            "Apparition", list(CAPTION_MODES),
+            index=list(CAPTION_MODES.values()).index(base.mode),
+        )
+        uppercase = st.toggle("MAJUSCULES", value=base.uppercase)
+        captions_style = replace(
+            base, font=font, font_size=font_size,
+            position=CAPTION_POSITIONS[position_label],
+            primary_color=primary_color, highlight_color=highlight_color,
+            mode=CAPTION_MODES[mode_label], uppercase=uppercase,
+        )
+        st.caption("La transcription (~1-3 min) est faite une fois puis réutilisée.")
+        if st.button("Aperçu du style (~4 s)", use_container_width=True):
+            with st.spinner("Rendu de l'aperçu…"):
+                try:
+                    preview = render_style_preview(
+                        source, window[0] or 0.0, captions_style, quality_key, background,
+                    )
+                    st.session_state["style_preview"] = str(preview)
+                except Exception as exc:  # noqa: BLE001 - message affiché tel quel
+                    st.session_state.pop("style_preview", None)
+                    st.error(f"Aperçu impossible : {exc}")
+        preview_path = st.session_state.get("style_preview")
+        if preview_path and Path(preview_path).is_file():
+            st.video(preview_path)
 
 with st.expander("Avancé"):
     detected = resolve_video_encoder("auto")
@@ -273,7 +363,7 @@ if st.button("Générer les clips  ✦", use_container_width=True):
             vertical_background=background,
             source_start=window[0],
             source_end=window[1],
-            transcribe=transcribe,
+            captions_style=captions_style,
             on_clip=on_clip,
             progress=on_progress,
         )

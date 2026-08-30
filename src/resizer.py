@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -53,12 +54,23 @@ def resize_clip_for_vertical(
     background: str = "blur",
     start: float | None = None,
     duration: float | None = None,
+    captions_file: str | Path | None = None,
 ) -> Path:
     """Place une vidéo paysage entière dans un cadre 9:16, sans recadrage."""
     source, destination = Path(input_path), Path(output_path)
     if not source.is_file():
         raise FileNotFoundError(f"Vidéo introuvable : {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    captions_name: str | None = None
+    if captions_file is not None:
+        captions_path = Path(captions_file)
+        if not captions_path.is_file():
+            raise FileNotFoundError(f"Sous-titres introuvables : {captions_path}")
+        # FFmpeg est lancé depuis le dossier de sortie ; le filtre `ass` reçoit un
+        # simple nom de fichier, ce qui évite les soucis d'échappement sous Windows.
+        captions_name = captions_path.name
+        if captions_path.parent.resolve() != destination.parent.resolve():
+            shutil.copyfile(captions_path, destination.parent / captions_name)
     preset = get_quality_preset(quality)
     width, height = preset.width, preset.height
     if background not in {"blur", "black"}:
@@ -85,12 +97,16 @@ def resize_clip_for_vertical(
             command.extend(["-t", str(duration)])
         if background == "blur":
             video_filter = _blur_background_filter(width, height)
+            if captions_name:
+                video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
             command.extend([
                 "-filter_complex", video_filter,
                 "-map", "[vout]", "-map", "0:a?",
             ])
         else:
             video_filter = _black_background_filter(width, height, cuda=cuda)
+            if captions_name:
+                video_filter += f",format=yuv420p,ass={captions_name}"
             command.extend(["-vf", video_filter])
         command.extend(video_encoder_args(resolved_encoder, encoding_speed))
         if not cuda:
@@ -101,11 +117,12 @@ def resize_clip_for_vertical(
         ])
         return command
 
-    result = subprocess.run(build_command(use_cuda), capture_output=True, text=True)
+    run_dir = str(destination.parent)
+    result = subprocess.run(build_command(use_cuda), capture_output=True, text=True, cwd=run_dir)
     if result.returncode != 0 and use_cuda:
         # Certains formats d'entrée ne sont pas acceptés par la chaîne CUDA.
         # L'encodage NVENC est conservé, seul le filtre repasse sur le CPU.
-        result = subprocess.run(build_command(False), capture_output=True, text=True)
+        result = subprocess.run(build_command(False), capture_output=True, text=True, cwd=run_dir)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "Échec du redimensionnement FFmpeg.")
     return destination

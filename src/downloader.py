@@ -69,12 +69,48 @@ def download_video(
         info = ydl.extract_info(url, download=True)
         if not info:
             raise RuntimeError("Aucune information vidéo reçue.")
+    return _newest_media(destination)
+
+
+def download_clip(
+    video_url: str,
+    output_dir: str | Path,
+    start: float,
+    end: float,
+    max_height: int = 480,
+) -> str:
+    """Télécharge seulement l'intervalle [start, end] en basse résolution (pour l'aperçu)."""
+    url = _validate_url(video_url)
+    if end <= start:
+        raise ValueError("La fin de l'extrait doit être après le début.")
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    for stale in destination.glob("preview_source*"):
+        stale.unlink()
+    options = {
+        "format": _format_selector(max_height),
+        "merge_output_format": "mp4",
+        "outtmpl": str(destination / "preview_source.%(ext)s"),
+        "noplaylist": True,
+        "overwrites": True,
+        "quiet": True,
+        "no_warnings": True,
+        "download_ranges": lambda _info, _ydl: [{"start_time": float(start), "end_time": float(end)}],
+        "force_keyframes_at_cuts": True,
+    }
+    with YoutubeDL(options) as ydl:
+        if not ydl.extract_info(url, download=True):
+            raise RuntimeError("Aucune information vidéo reçue.")
+    return _newest_media(destination)
+
+
+def _newest_media(destination: Path) -> str:
     candidates = [
         path for path in destination.iterdir()
         if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}
     ]
-    if candidates:
-        # Le MP4 fusionné est prioritaire, puis le plus gros média disponible.
-        candidates.sort(key=lambda path: (path.suffix.lower() == ".mp4", path.stat().st_size), reverse=True)
-        return str(candidates[0].resolve())
-    raise RuntimeError("Téléchargement terminé, mais aucun fichier vidéo n'a été trouvé.")
+    if not candidates:
+        raise RuntimeError("Téléchargement terminé, mais aucun fichier vidéo n'a été trouvé.")
+    # Le MP4 fusionné est prioritaire, puis le plus gros média disponible.
+    candidates.sort(key=lambda path: (path.suffix.lower() == ".mp4", path.stat().st_size), reverse=True)
+    return str(candidates[0].resolve())

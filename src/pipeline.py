@@ -6,6 +6,7 @@ import shutil
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.downloader import download_video
 from src.encoder import encoder_label, resolve_video_encoder
@@ -17,6 +18,9 @@ from src.video_splitter import (
     resolve_source_window,
     split_video,
 )
+
+if TYPE_CHECKING:
+    from src.captions import CaptionStyle
 
 ProgressCallback = Callable[[float, str], None]
 ClipCallback = Callable[[Path], None]
@@ -37,6 +41,7 @@ def process_video(
     source_end: float | None = None,
     transcribe: bool = False,
     transcribe_model: str = "large-v3",
+    captions_style: CaptionStyle | None = None,
     on_clip: ClipCallback | None = None,
     progress: ProgressCallback | None = None,
 ) -> tuple[Path, list[Path]]:
@@ -65,16 +70,17 @@ def process_video(
     window_start, window_end = resolve_source_window(
         get_video_duration(source), source_start, source_end
     )
-    if transcribe:
+    transcript = None
+    if transcribe or captions_style is not None:
         from src.transcribe import dump_transcript
         from src.transcribe import transcribe as run_transcription
 
         report(0.15, "Transcription de la vidéo…")
-        result = run_transcription(
+        transcript = run_transcription(
             source, model=transcribe_model,
             progress=lambda value, message: report(0.15 + 0.08 * value, message),
         )
-        dump_transcript(result, project_dir / "transcript.json")
+        dump_transcript(transcript, project_dir / "transcript.json")
     if not vertical:
         report(0.25, f"Découpage via {encoder_label(resolved_encoder)}…")
         landscape = [
@@ -101,11 +107,21 @@ def process_video(
             f"Export {offset + 1}/{clip_count} · {encoder_label(resolved_encoder)}…",
         )
         output = vertical_dir / f"clip_{offset + 1:03d}.mp4"
+        clip_captions = None
+        if captions_style is not None and transcript is not None:
+            from src.captions import write_clip_captions
+
+            clip_captions = write_clip_captions(
+                transcript, output.with_suffix(".ass"),
+                clip_start=start, clip_end=start + length,
+                width=quality.width, height=quality.height, style=captions_style,
+            )
         clip_path = resize_clip_for_vertical(
             source, output, encoder=encoder,
             encoding_speed=encoding_speed, quality=quality.key,
             background=vertical_background,
             start=start, duration=length,
+            captions_file=clip_captions,
         )
         exports.append(clip_path)
         notify_clip(clip_path)

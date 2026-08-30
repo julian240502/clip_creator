@@ -19,9 +19,28 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
 - profils d'encodage rapide, équilibré ou qualité maximale ;
 - découpage et conversion verticale en une seule passe d'encodage ;
 - aperçu et téléchargement individuel ou groupé en ZIP ;
-- un dossier distinct par traitement dans `data/projects/`.
+- un dossier distinct par traitement dans `data/projects/` ;
+- sous-titres animés incrustés (optionnel) : styles, police, taille, couleur, position,
+  et modes d'apparition mot actif / karaoké / mot par mot / ligne par ligne.
 
-Les sous-titres ne sont volontairement pas intégrés : ils sont ajoutés ensuite dans CapCut ou Camtasia.
+## Sous-titres incrustés (optionnel)
+
+Nécessite `faster-whisper` :
+
+```bash
+python -m pip install -r requirements-transcribe.txt
+```
+
+Une fois installé, la case **Sous-titres incrustés** apparaît dans les réglages (export 9:16
+uniquement). La vidéo est transcrite mot par mot une seule fois (résultat mis en cache dans
+`data/transcriptions/`, `transcript.json` copié dans le dossier projet), puis un fichier `.ass`
+est généré par clip et gravé dans l'image par FFmpeg.
+
+Réglages : template de style, police, taille, position, couleur du texte, couleur du mot actif,
+mode d'apparition (mot actif, karaoké, mot par mot, ligne par ligne), majuscules. Le bouton
+**Aperçu du style** rend un extrait de ~4 s avec les réglages courants avant de lancer tous les clips.
+
+Sur GPU NVIDIA, la transcription utilise CUDA (`float16`) ; sinon elle bascule sur le CPU (`int8`).
 
 ## Prérequis
 
