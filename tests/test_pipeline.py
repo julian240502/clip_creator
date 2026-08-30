@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.downloader import _validate_url
+from src.encoder import encoder_label, resolve_video_encoder, video_encoder_args
 from src.resizer import resize_clip_for_vertical
 from src.video_splitter import get_video_duration, split_video
 
@@ -22,7 +23,7 @@ def sample_video(tmp_path: Path) -> Path:
 
 
 def test_split_video_is_precise(sample_video: Path, tmp_path: Path) -> None:
-    clips = split_video(sample_video, 2, tmp_path / "clips")
+    clips = split_video(sample_video, 2, tmp_path / "clips", encoder="cpu")
     assert len(clips) == 2
     assert get_video_duration(clips[0]) == pytest.approx(2, abs=0.15)
     assert get_video_duration(clips[1]) == pytest.approx(1, abs=0.15)
@@ -30,7 +31,7 @@ def test_split_video_is_precise(sample_video: Path, tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("mode", ["crop", "fit"])
 def test_vertical_export(sample_video: Path, tmp_path: Path, mode: str) -> None:
-    output = resize_clip_for_vertical(sample_video, tmp_path / f"{mode}.mp4", mode)
+    output = resize_clip_for_vertical(sample_video, tmp_path / f"{mode}.mp4", mode, encoder="cpu")
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(output)],
         capture_output=True, text=True, check=True,
@@ -43,7 +44,22 @@ def test_invalid_mode(sample_video: Path, tmp_path: Path) -> None:
         resize_clip_for_vertical(sample_video, tmp_path / "bad.mp4", "stretch")
 
 
+def test_vertical_segment_is_cut_in_one_pass(sample_video: Path, tmp_path: Path) -> None:
+    output = resize_clip_for_vertical(
+        sample_video, tmp_path / "segment.mp4", "crop",
+        encoder="cpu", start=1, duration=1,
+    )
+    assert get_video_duration(output) == pytest.approx(1, abs=0.15)
+
+
 def test_url_validation() -> None:
     assert _validate_url(" https://youtu.be/example ") == "https://youtu.be/example"
     with pytest.raises(ValueError):
         _validate_url("not-a-url")
+
+
+def test_cpu_encoder_fallback() -> None:
+    encoder = resolve_video_encoder("cpu")
+    assert encoder == "libx264"
+    assert "veryfast" in video_encoder_args(encoder)
+    assert encoder_label(encoder) == "CPU · x264"

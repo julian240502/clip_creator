@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import shutil
 from datetime import datetime
@@ -7,9 +8,10 @@ from pathlib import Path
 from typing import Callable
 
 from src.downloader import download_video
+from src.encoder import encoder_label, resolve_video_encoder
 from src.paths import DATA_DIR
 from src.resizer import resize_clip_for_vertical
-from src.video_splitter import split_video
+from src.video_splitter import get_video_duration, split_video
 
 ProgressCallback = Callable[[float, str], None]
 
@@ -22,6 +24,7 @@ def _project_name(name: str) -> str:
 def process_video(
     *, url: str | None = None, uploaded_path: str | Path | None = None,
     clip_length: int = 30, vertical: bool = True, vertical_mode: str = "crop",
+    encoder: str = "auto",
     progress: ProgressCallback | None = None,
 ) -> tuple[Path, list[Path]]:
     """Exécute le pipeline et renvoie le dossier projet et les exports finaux."""
@@ -43,14 +46,35 @@ def process_video(
             raise FileNotFoundError(f"Fichier introuvable : {incoming}")
         source = source_dir / incoming.name
         shutil.copy2(incoming, source)
-    report(0.25, "Découpage précis des clips…")
-    landscape = [Path(item) for item in split_video(source, clip_length, project_dir / "clips")]
+    resolved_encoder = resolve_video_encoder(encoder)
     if not vertical:
+        report(0.25, f"Découpage via {encoder_label(resolved_encoder)}…")
+        landscape = [
+            Path(item) for item in split_video(
+                source, clip_length, project_dir / "clips", encoder=encoder
+            )
+        ]
         report(1.0, "Exports terminés")
         return project_dir, landscape
+    # Découpage et conversion verticale sont réalisés ensemble : chaque image
+    # n'est encodée qu'une fois au lieu de subir deux passes successives.
+    duration = get_video_duration(source)
+    clip_count = math.ceil(duration / clip_length)
     vertical_dir, exports = project_dir / "vertical", []
-    for index, clip in enumerate(landscape, start=1):
-        report(0.25 + 0.7 * ((index - 1) / max(len(landscape), 1)), f"Format vertical {index}/{len(landscape)}…")
-        exports.append(resize_clip_for_vertical(clip, vertical_dir / clip.name, vertical_mode))
+    report(0.25, f"Découpage + format vertical via {encoder_label(resolved_encoder)}…")
+    for offset in range(clip_count):
+        start = offset * clip_length
+        length = min(clip_length, duration - start)
+        report(
+            0.25 + 0.7 * (offset / max(clip_count, 1)),
+            f"Export {offset + 1}/{clip_count} · {encoder_label(resolved_encoder)}…",
+        )
+        output = vertical_dir / f"clip_{offset + 1:03d}.mp4"
+        exports.append(
+            resize_clip_for_vertical(
+                source, output, vertical_mode, encoder=encoder,
+                start=start, duration=length,
+            )
+        )
     report(1.0, "Exports terminés")
     return project_dir, exports

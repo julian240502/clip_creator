@@ -7,6 +7,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from src.encoder import encoder_label, resolve_video_encoder
 from src.pipeline import process_video
 
 
@@ -34,8 +35,12 @@ with st.sidebar:
     vertical = st.toggle("Exporter en 9:16", value=True)
     mode_label = st.radio("Composition verticale", ["Recadrage plein écran", "Vidéo entière + bandes"], disabled=not vertical)
     vertical_mode = "crop" if mode_label.startswith("Recadrage") else "fit"
+    detected_encoder = resolve_video_encoder("auto")
+    automatic_label = f"Automatique · {encoder_label(detected_encoder)}"
+    encoder_choice = st.selectbox("Accélération", [automatic_label, "CPU · x264"])
+    encoder = "auto" if encoder_choice == automatic_label else "cpu"
     st.divider()
-    st.caption("1080 × 1920 · H.264 · AAC · Sans sous-titres")
+    st.caption(f"1080 × 1920 · H.264 · AAC · {encoder_label(resolve_video_encoder(encoder))}")
 
 with st.form("creator"):
     source_type = st.radio("Source", ["Lien vidéo", "Fichier local"], horizontal=True)
@@ -63,7 +68,8 @@ if submitted:
             status.caption(message)
         project_dir, clips = process_video(
             url=url.strip() or None, uploaded_path=upload_path, clip_length=clip_length,
-            vertical=vertical, vertical_mode=vertical_mode, progress=update_progress,
+            vertical=vertical, vertical_mode=vertical_mode, encoder=encoder,
+            progress=update_progress,
         )
         st.success(f"{len(clips)} clip(s) prêt(s) pour le montage.")
         archive_path = project_dir / "clip-creator-exports.zip"

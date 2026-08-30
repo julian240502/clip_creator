@@ -22,7 +22,9 @@ def download_video(video_url: str, output_dir: str | Path | None = None) -> str:
     destination = Path(output_dir or RAW_VIDEOS_DIR)
     destination.mkdir(parents=True, exist_ok=True)
     options = {
-        "format": "bv*+ba/b",
+        # L'export final est en 1080p : télécharger une source 4K ralentirait
+        # fortement le décodage sans améliorer le résultat.
+        "format": "bv*[height<=1080]+ba/b[height<=1080]/b",
         "merge_output_format": "mp4",
         "outtmpl": str(destination / "%(title).120B [%(id)s].%(ext)s"),
         "noplaylist": True,
