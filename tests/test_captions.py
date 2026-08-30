@@ -106,6 +106,36 @@ def test_window_slice_rebases_timestamps() -> None:
     assert "Trop" in ass and "Crispy" not in ass
 
 
+def test_build_ass_with_no_speech_has_no_dialogue() -> None:
+    empty = Transcript(language="nn", duration=5.0, model="test", segments=[])
+    ass = build_ass(
+        empty, clip_start=0.0, clip_end=5.0, width=1080, height=1920,
+        style=TEMPLATES["Mot actif"],
+    )
+    assert "[V4+ Styles]" in ass
+    assert "Dialogue:" not in ass
+
+
+def test_pipeline_skips_captions_when_no_speech(
+    sample_video: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    from src import pipeline
+    from src import transcribe as transcribe_mod
+
+    monkeypatch.setattr(
+        transcribe_mod, "transcribe",
+        lambda *a, **k: Transcript(language="nn", duration=3.0, model="x", segments=[]),
+    )
+    monkeypatch.setattr(pipeline, "DATA_DIR", str(tmp_path))
+    project_dir, clips = pipeline.process_video(
+        uploaded_path=sample_video, clip_length=2, vertical=True, encoder="cpu",
+        export_quality="720p", encoding_speed="fast", captions_style=TEMPLATES["Mot actif"],
+    )
+    assert len(clips) >= 1
+    assert (Path(project_dir) / "transcript.json").is_file()
+    assert not list(Path(project_dir).rglob("*.ass"))
+
+
 def test_captions_are_burned_into_the_vertical_export(sample_video: Path, tmp_path: Path) -> None:
     ass = write_clip_captions(
         _transcript(), tmp_path / "clip_001.ass",

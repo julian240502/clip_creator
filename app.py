@@ -24,7 +24,7 @@ from src.encoder import available_hardware_encoders, encoder_label, resolve_vide
 from src.pipeline import process_video
 from src.quality import get_quality_preset
 from src.resizer import resize_clip_for_vertical
-from src.transcribe import transcribe, transcription_available
+from src.transcribe import load_transcript, transcribe, transcription_available
 from src.video_splitter import get_video_duration, get_video_resolution
 
 st.set_page_config(page_title="Clip Creator", page_icon="✦", layout="wide")
@@ -82,7 +82,10 @@ def session_dir() -> Path:
 
 
 def reset_source() -> None:
-    for key in ("source", "clips", "project_dir", "style_preview", "style_preview_sig", "preview_at"):
+    for key in (
+        "source", "clips", "project_dir", "captions_skipped",
+        "style_preview", "style_preview_sig", "preview_at",
+    ):
         st.session_state.pop(key, None)
     shutil.rmtree(session_dir(), ignore_errors=True)
 
@@ -125,12 +128,26 @@ def _preview_source(source: dict, at: float, seconds: float = 4.0) -> Path:
     return clip
 
 
+def _transcript_has_words(project_dir: str) -> bool:
+    path = Path(project_dir) / "transcript.json"
+    if not path.is_file():
+        return False
+    try:
+        return bool(load_transcript(path).words)
+    except Exception:  # noqa: BLE001 - transcription illisible = pas de sous-titres
+        return False
+
+
 def render_style_preview(source: dict, at: float, style, quality_key: str, background: str) -> Path:
     short = _preview_source(source, at)
     duration = min(4.0, get_video_duration(short))
     quality = get_quality_preset(quality_key)
     # Modèle léger pour l'aperçu : on juge le style, pas la précision du texte.
     transcript = transcribe(short, model=PREVIEW_MODEL, cache_dir=session_dir())
+    if not transcript.words:
+        raise RuntimeError(
+            "Aucune parole détectée dans cet extrait — impossible de générer des sous-titres."
+        )
     ass = write_clip_captions(
         transcript, session_dir() / "preview" / "preview.ass",
         clip_start=0.0, clip_end=duration,
@@ -193,6 +210,8 @@ if st.session_state.get("clips"):
     clips = [Path(item) for item in st.session_state.clips]
     st.markdown('<section class="hero"><h1>Clips prêts ✦</h1></section>', unsafe_allow_html=True)
     st.caption(f"{len(clips)} clip(s) · {source['title']}")
+    if st.session_state.get("captions_skipped"):
+        st.warning("Aucune parole détectée dans la vidéo : clips générés sans sous-titres.")
 
     project_dir = st.session_state.get("project_dir")
     if project_dir:
@@ -221,8 +240,8 @@ if st.session_state.get("clips"):
 
     left, right = st.columns(2)
     if left.button("Régler à nouveau", use_container_width=True):
-        st.session_state.pop("clips", None)
-        st.session_state.pop("project_dir", None)
+        for key in ("clips", "project_dir", "captions_skipped"):
+            st.session_state.pop(key, None)
         st.rerun()
     if right.button("Nouvelle vidéo", use_container_width=True):
         reset_source()
@@ -382,6 +401,9 @@ if st.button("Générer les clips  ✦", use_container_width=True):
         )
         st.session_state.project_dir = str(project_dir)
         st.session_state.clips = [str(clip) for clip in clips]
+        st.session_state["captions_skipped"] = bool(
+            captions_style is not None and not _transcript_has_words(str(project_dir))
+        )
         st.rerun()
     except Exception as exc:  # noqa: BLE001 - message affiché tel quel
         st.error(f"Le traitement a échoué : {exc}")

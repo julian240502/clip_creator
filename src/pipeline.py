@@ -81,6 +81,10 @@ def process_video(
             progress=lambda value, message: report(0.15 + 0.08 * value, message),
         )
         dump_transcript(transcript, project_dir / "transcript.json")
+        if captions_style is not None and not transcript.words:
+            # Aucune parole détectée : on garde les clips mais sans sous-titres.
+            report(0.24, "Aucune parole détectée — clips générés sans sous-titres.")
+            captions_style = None
     if not vertical:
         report(0.25, f"Découpage via {encoder_label(resolved_encoder)}…")
         landscape = [
