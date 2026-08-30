@@ -3,9 +3,9 @@ from __future__ import annotations
 import math
 import re
 import shutil
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from src.downloader import download_video
 from src.encoder import encoder_label, resolve_video_encoder

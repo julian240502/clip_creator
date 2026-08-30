@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from src.encoder import resolve_video_encoder, video_encoder_args
 

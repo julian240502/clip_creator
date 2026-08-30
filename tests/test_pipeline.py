@@ -76,11 +76,7 @@ def test_vertical_export_preserves_landscape_video(
         sample_video, tmp_path / "vertical.mp4", encoder="cpu", quality="720p",
         background="blur",
     )
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(output)],
-        capture_output=True, text=True, check=True,
-    )
-    assert probe.stdout.strip() == "720,1280"
+    assert get_video_resolution(output) == (720, 1280)
 
 
 def test_vertical_segment_is_cut_in_one_pass(sample_video: Path, tmp_path: Path) -> None:
@@ -95,11 +91,7 @@ def test_4k_vertical_export(sample_video: Path, tmp_path: Path) -> None:
         sample_video, tmp_path / "4k.mp4", encoder="cpu",
         quality="4k", start=0, duration=0.25,
     )
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(output)],
-        capture_output=True, text=True, check=True,
-    )
-    assert probe.stdout.strip() == "2160,3840"
+    assert get_video_resolution(output) == (2160, 3840)
 
 
 def test_cuda_black_filter_scales_then_adds_bands() -> None:

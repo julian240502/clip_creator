@@ -82,7 +82,11 @@ ffmpeg -hide_banner -encoders | Select-String "h264_nvenc|h264_qsv|h264_amf"
 ## Tests
 
 ```bash
+python -m pip install -r requirements-dev.txt
+ruff check .
 pytest
 ```
 
 Les tests génèrent leurs propres médias avec FFmpeg et ne téléchargent aucune vidéo.
+Le lint (`ruff`) et les tests tournent aussi en CI sur chaque push et pull request
+(voir `.github/workflows/ci.yml`).

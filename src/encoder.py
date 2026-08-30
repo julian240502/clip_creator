@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from functools import lru_cache
-
+from functools import cache, lru_cache
 
 ENCODERS = {
     "cpu": "libx264",
@@ -27,7 +26,7 @@ PROBE_SOURCE = (
 )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _encoder_works(encoder: str) -> bool:
     """Vérifie que l'encodeur est compilé et utilisable avec le pilote présent."""
     command = [
