@@ -1,0 +1,4 @@
+# Transcription (optionnel) — active la case « Transcrire » dans l'app.
+# GPU NVIDIA : CUDA 12 + cuDNN 9 requis pour le mode "cuda" ; sinon repli CPU (int8).
+-r requirements.txt
+faster-whisper>=1.0

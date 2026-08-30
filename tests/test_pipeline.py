@@ -1,4 +1,3 @@
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -23,19 +22,6 @@ from src.video_splitter import (
     resolve_source_window,
     split_video,
 )
-
-
-@pytest.fixture()
-def sample_video(tmp_path: Path) -> Path:
-    output = tmp_path / "sample.mp4"
-    command = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=3",
-        "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
-        "-c:v", "libx264", "-c:a", "aac", "-shortest", str(output),
-    ]
-    subprocess.run(command, check=True)
-    return output
 
 
 def test_split_video_is_precise(sample_video: Path, tmp_path: Path) -> None:

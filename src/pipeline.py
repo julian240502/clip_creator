@@ -35,6 +35,8 @@ def process_video(
     vertical_background: str = "blur",
     source_start: float | None = None,
     source_end: float | None = None,
+    transcribe: bool = False,
+    transcribe_model: str = "large-v3",
     on_clip: ClipCallback | None = None,
     progress: ProgressCallback | None = None,
 ) -> tuple[Path, list[Path]]:
@@ -63,6 +65,16 @@ def process_video(
     window_start, window_end = resolve_source_window(
         get_video_duration(source), source_start, source_end
     )
+    if transcribe:
+        from src.transcribe import dump_transcript
+        from src.transcribe import transcribe as run_transcription
+
+        report(0.15, "Transcription de la vidéo…")
+        result = run_transcription(
+            source, model=transcribe_model,
+            progress=lambda value, message: report(0.15 + 0.08 * value, message),
+        )
+        dump_transcript(result, project_dir / "transcript.json")
     if not vertical:
         report(0.25, f"Découpage via {encoder_label(resolved_encoder)}…")
         landscape = [

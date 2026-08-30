@@ -12,6 +12,7 @@ import streamlit as st
 from src.downloader import probe_url
 from src.encoder import available_hardware_encoders, encoder_label, resolve_video_encoder
 from src.pipeline import process_video
+from src.transcribe import transcription_available
 from src.video_splitter import get_video_duration, get_video_resolution
 
 st.set_page_config(page_title="Clip Creator", page_icon="✦", layout="wide")
@@ -152,6 +153,14 @@ if st.session_state.get("clips"):
                 "application/zip", use_container_width=True,
             )
 
+        transcript_file = Path(project_dir) / "transcript.json"
+        if transcript_file.is_file():
+            with transcript_file.open("rb") as handle:
+                st.download_button(
+                    "Télécharger la transcription (.json)", handle, "transcript.json",
+                    "application/json", use_container_width=True,
+                )
+
     columns = st.columns(3)
     for index, clip in enumerate(clips):
         with columns[index % 3]:
@@ -217,6 +226,15 @@ if vertical:
     background = BACKGROUND_CHOICES[st.selectbox("Arrière-plan vertical", list(BACKGROUND_CHOICES))]
     st.caption("La vidéo paysage nette reste entièrement visible au premier plan.")
 
+can_transcribe = transcription_available()
+transcribe = st.toggle(
+    "Transcrire la vidéo (base des sous-titres)", value=False, disabled=not can_transcribe,
+)
+if not can_transcribe:
+    st.caption("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
+elif transcribe:
+    st.caption("Ajoute ~1-3 min au traitement. Résultat mis en cache et réutilisé.")
+
 with st.expander("Avancé"):
     detected = resolve_video_encoder("auto")
     encoder_options = {f"Automatique · {encoder_label(detected)}": "auto"}
@@ -255,6 +273,7 @@ if st.button("Générer les clips  ✦", use_container_width=True):
             vertical_background=background,
             source_start=window[0],
             source_end=window[1],
+            transcribe=transcribe,
             on_clip=on_clip,
             progress=on_progress,
         )
