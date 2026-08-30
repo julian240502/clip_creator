@@ -61,7 +61,9 @@ Avec une carte NVIDIA, le redimensionnement est confié à CUDA et l'encodage à
 NVENC. Le profil **Rapide** utilise le preset NVENC P1. La vidéo paysage reste
 entièrement visible dans le cadre vertical : aucun recadrage n'est appliqué.
 Par défaut, une copie agrandie et floutée de la vidéo remplit l'espace libre
-derrière l'image nette.
+derrière l'image nette. Cette composition utilise les filtres compatibles de
+FFmpeg pour éviter les corruptions de couleur de certains builds Windows ;
+l'encodage final reste accéléré par NVENC.
 
 La qualité 4K télécharge la meilleure source disponible jusqu'à 2160p et
 produit un export vertical 2160 × 3840. Si la source n'existe pas en 4K,

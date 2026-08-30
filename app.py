@@ -9,7 +9,6 @@ import streamlit as st
 
 from src.encoder import (
     available_hardware_encoders,
-    cuda_blur_compositing_available,
     cuda_scaling_available,
     encoder_label,
     resolve_video_encoder,
@@ -81,14 +80,12 @@ with st.sidebar:
     st.divider()
     dimensions = f"{quality.width} × {quality.height}" if vertical else f"source ≤ {quality.source_max_height}p"
     active_encoder = resolve_video_encoder(encoder)
-    cuda_available = (
-        cuda_blur_compositing_available()
-        if vertical_background == "blur"
-        else cuda_scaling_available()
-    )
+    cuda_available = vertical_background == "black" and cuda_scaling_available()
     cuda_active = vertical and active_encoder == "h264_nvenc" and cuda_available
     cuda_label = " · redimensionnement CUDA" if cuda_active else ""
     st.caption(f"{dimensions} · H.264 · AAC · {encoder_label(active_encoder)}{cuda_label}")
+    if vertical and vertical_background == "blur" and active_encoder == "h264_nvenc":
+        st.caption("Fond flouté en mode compatible · encodage NVIDIA NVENC.")
     if export_quality == "4k":
         st.caption("La 4K produit des fichiers plus lourds et demande plus de temps d'encodage.")
 

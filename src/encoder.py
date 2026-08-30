@@ -71,21 +71,6 @@ def cuda_scaling_available() -> bool:
         return False
 
 
-@lru_cache(maxsize=1)
-def cuda_blur_compositing_available() -> bool:
-    """Vérifie la présence de l'overlay CUDA utilisé par le fond flouté."""
-    if not cuda_scaling_available():
-        return False
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-filters"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and "overlay_cuda" in result.stdout
-
-
 def resolve_video_encoder(preference: str = "auto") -> str:
     if preference == "auto":
         available = available_hardware_encoders()

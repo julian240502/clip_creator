@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path
 
 from src.encoder import (
-    cuda_blur_compositing_available,
     cuda_scaling_available,
     resolve_video_encoder,
     video_encoder_args,
@@ -27,25 +26,11 @@ def _black_background_filter(width: int, height: int, *, cuda: bool) -> str:
     )
 
 
-def _blur_background_filter(width: int, height: int, *, cuda: bool) -> str:
+def _blur_background_filter(width: int, height: int) -> str:
     preview_width = max(180, width // 4)
     preview_height = max(320, height // 4)
     # Un flou modéré garde le fond identifiable sans concurrencer le premier plan.
     blur_radius = max(6, preview_width // 28)
-    if cuda:
-        return (
-            "[0:v]format=nv12,hwupload_cuda,split=2[background_source][foreground_source];"
-            f"[background_source]scale_cuda=w={preview_width}:h={preview_height}:"
-            "force_original_aspect_ratio=increase:force_divisible_by=2:"
-            "interp_algo=bicubic:format=nv12,hwdownload,format=nv12,"
-            f"crop={preview_width}:{preview_height},boxblur={blur_radius}:2,"
-            "hwupload_cuda,"
-            f"scale_cuda=w={width}:h={height}:interp_algo=bicubic:format=nv12[background];"
-            f"[foreground_source]scale_cuda=w={width}:h={height}:"
-            "force_original_aspect_ratio=decrease:force_divisible_by=2:"
-            "interp_algo=bicubic:format=nv12[foreground];"
-            "[background][foreground]overlay_cuda=x=(W-w)/2:y=(H-h)/2[vout]"
-        )
     return (
         "[0:v]split=2[background_source][foreground_source];"
         f"[background_source]scale={preview_width}:{preview_height}:"
@@ -83,12 +68,13 @@ def resize_clip_for_vertical(
     if duration is not None and duration <= 0:
         raise ValueError("La durée du clip doit être positive.")
     resolved_encoder = resolve_video_encoder(encoder)
-    cuda_available = (
-        cuda_blur_compositing_available()
-        if background == "blur"
-        else cuda_scaling_available()
+    # overlay_cuda produit des zones vertes avec certains builds Windows.
+    # Le fond flouté reste en filtres logiciels, tout en conservant NVENC.
+    use_cuda = (
+        background == "black"
+        and resolved_encoder == "h264_nvenc"
+        and cuda_scaling_available()
     )
-    use_cuda = resolved_encoder == "h264_nvenc" and cuda_available
 
     def build_command(cuda: bool) -> list[str]:
         command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
@@ -98,7 +84,7 @@ def resize_clip_for_vertical(
         if duration is not None:
             command.extend(["-t", str(duration)])
         if background == "blur":
-            video_filter = _blur_background_filter(width, height, cuda=cuda)
+            video_filter = _blur_background_filter(width, height)
             command.extend([
                 "-filter_complex", video_filter,
                 "-map", "[vout]", "-map", "0:a?",
