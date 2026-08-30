@@ -8,7 +8,7 @@ Application locale pour télécharger ou importer une vidéo, la découper en cl
 - import de fichiers MP4, MOV, MKV et WebM ;
 - découpage précis avec une durée configurable ;
 - export vertical sans déformation en 720p, 1080p ou 4K ;
-- choix entre recadrage plein écran et conservation de l'image entière ;
+- conservation intégrale de la vidéo paysage avec des bandes noires en 9:16 ;
 - accélération matérielle automatique NVIDIA NVENC, Intel Quick Sync ou AMD AMF ;
 - redimensionnement CUDA sur NVIDIA pour le recadrage vertical ;
 - profils d'encodage rapide, équilibré ou qualité maximale ;
@@ -56,10 +56,9 @@ NVIDIA NVENC, Intel Quick Sync, AMD AMF, puis CPU x264. Le choix actif est
 visible dans la barre latérale. Chaque GPU détecté et le CPU restent aussi
 sélectionnables manuellement.
 
-Avec une carte NVIDIA, le mode **Recadrage plein écran** transfère le
-redimensionnement à CUDA et encode avec NVENC. Le profil **Rapide** utilise le
-preset NVENC P1. Le mode **Vidéo entière + bandes** reste compatible avec tous
-les GPU, mais la composition des bandes est effectuée par le processeur.
+Avec une carte NVIDIA, le redimensionnement est confié à CUDA et l'encodage à
+NVENC. Le profil **Rapide** utilise le preset NVENC P1. La vidéo paysage reste
+entièrement visible dans le cadre vertical : aucun recadrage n'est appliqué.
 
 La qualité 4K télécharge la meilleure source disponible jusqu'à 2160p et
 produit un export vertical 2160 × 3840. Si la source n'existe pas en 4K,

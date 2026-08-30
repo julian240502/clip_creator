@@ -24,7 +24,7 @@ def _project_name(name: str) -> str:
 
 def process_video(
     *, url: str | None = None, uploaded_path: str | Path | None = None,
-    clip_length: int = 30, vertical: bool = True, vertical_mode: str = "crop",
+    clip_length: int = 30, vertical: bool = True,
     encoder: str = "auto", export_quality: str = "1080p",
     encoding_speed: str = "balanced",
     progress: ProgressCallback | None = None,
@@ -76,7 +76,7 @@ def process_video(
         output = vertical_dir / f"clip_{offset + 1:03d}.mp4"
         exports.append(
             resize_clip_for_vertical(
-                source, output, vertical_mode, encoder=encoder,
+                source, output, encoder=encoder,
                 encoding_speed=encoding_speed, quality=quality.key,
                 start=start, duration=length,
             )

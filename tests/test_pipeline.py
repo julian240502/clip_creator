@@ -5,7 +5,7 @@ import pytest
 
 from src.downloader import _format_selector, _validate_url
 from src.encoder import encoder_label, resolve_video_encoder, video_encoder_args
-from src.resizer import resize_clip_for_vertical
+from src.resizer import _vertical_filter, resize_clip_for_vertical
 from src.video_splitter import get_video_duration, split_video
 
 
@@ -29,41 +29,29 @@ def test_split_video_is_precise(sample_video: Path, tmp_path: Path) -> None:
     assert get_video_duration(clips[1]) == pytest.approx(1, abs=0.15)
 
 
-@pytest.mark.parametrize(
-    ("mode", "quality", "expected_dimensions"),
-    [("crop", "1080p", "1080,1920"), ("fit", "720p", "720,1280")],
-)
-def test_vertical_export(
-    sample_video: Path, tmp_path: Path, mode: str,
-    quality: str, expected_dimensions: str,
+def test_vertical_export_preserves_landscape_video(
+    sample_video: Path, tmp_path: Path,
 ) -> None:
     output = resize_clip_for_vertical(
-        sample_video, tmp_path / f"{mode}.mp4", mode,
-        encoder="cpu", quality=quality,
+        sample_video, tmp_path / "vertical.mp4", encoder="cpu", quality="720p",
     )
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(output)],
         capture_output=True, text=True, check=True,
     )
-    assert probe.stdout.strip() == expected_dimensions
-
-
-def test_invalid_mode(sample_video: Path, tmp_path: Path) -> None:
-    with pytest.raises(ValueError):
-        resize_clip_for_vertical(sample_video, tmp_path / "bad.mp4", "stretch")
+    assert probe.stdout.strip() == "720,1280"
 
 
 def test_vertical_segment_is_cut_in_one_pass(sample_video: Path, tmp_path: Path) -> None:
     output = resize_clip_for_vertical(
-        sample_video, tmp_path / "segment.mp4", "crop",
-        encoder="cpu", start=1, duration=1,
+        sample_video, tmp_path / "segment.mp4", encoder="cpu", start=1, duration=1,
     )
     assert get_video_duration(output) == pytest.approx(1, abs=0.15)
 
 
 def test_4k_vertical_export(sample_video: Path, tmp_path: Path) -> None:
     output = resize_clip_for_vertical(
-        sample_video, tmp_path / "4k.mp4", "crop", encoder="cpu",
+        sample_video, tmp_path / "4k.mp4", encoder="cpu",
         quality="4k", start=0, duration=0.25,
     )
     probe = subprocess.run(
@@ -71,6 +59,14 @@ def test_4k_vertical_export(sample_video: Path, tmp_path: Path) -> None:
         capture_output=True, text=True, check=True,
     )
     assert probe.stdout.strip() == "2160,3840"
+
+
+def test_cuda_filter_scales_then_adds_bands() -> None:
+    video_filter = _vertical_filter(1080, 1920, cuda=True)
+    assert "scale_cuda=" in video_filter
+    assert "force_original_aspect_ratio=decrease" in video_filter
+    assert "hwdownload" in video_filter
+    assert "pad=1080:1920" in video_filter
 
 
 def test_url_validation() -> None:

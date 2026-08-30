@@ -47,8 +47,8 @@ with st.sidebar:
     export_quality = quality_labels[quality_label]
     quality = get_quality_preset(export_quality)
     vertical = st.toggle("Exporter en 9:16", value=True)
-    mode_label = st.radio("Composition verticale", ["Recadrage plein écran", "Vidéo entière + bandes"], disabled=not vertical)
-    vertical_mode = "crop" if mode_label.startswith("Recadrage") else "fit"
+    if vertical:
+        st.caption("La vidéo paysage entière sera conservée avec des bandes noires.")
     detected_encoder = resolve_video_encoder("auto")
     automatic_label = f"Automatique · {encoder_label(detected_encoder)}"
     encoder_preferences = {
@@ -72,11 +72,9 @@ with st.sidebar:
     st.divider()
     dimensions = f"{quality.width} × {quality.height}" if vertical else f"source ≤ {quality.source_max_height}p"
     active_encoder = resolve_video_encoder(encoder)
-    cuda_active = vertical and vertical_mode == "crop" and active_encoder == "h264_nvenc" and cuda_scaling_available()
+    cuda_active = vertical and active_encoder == "h264_nvenc" and cuda_scaling_available()
     cuda_label = " · redimensionnement CUDA" if cuda_active else ""
     st.caption(f"{dimensions} · H.264 · AAC · {encoder_label(active_encoder)}{cuda_label}")
-    if vertical and vertical_mode == "fit" and active_encoder == "h264_nvenc":
-        st.caption("Le mode avec bandes encode via NVENC, mais compose l'image sur le processeur.")
     if export_quality == "4k":
         st.caption("La 4K produit des fichiers plus lourds et demande plus de temps d'encodage.")
 
@@ -106,7 +104,7 @@ if submitted:
             status.caption(message)
         project_dir, clips = process_video(
             url=url.strip() or None, uploaded_path=upload_path, clip_length=clip_length,
-            vertical=vertical, vertical_mode=vertical_mode, encoder=encoder,
+            vertical=vertical, encoder=encoder,
             export_quality=export_quality, encoding_speed=encoding_speed,
             progress=update_progress,
         )

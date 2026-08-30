@@ -7,10 +7,24 @@ from src.encoder import cuda_scaling_available, resolve_video_encoder, video_enc
 from src.quality import get_quality_preset
 
 
+def _vertical_filter(width: int, height: int, *, cuda: bool) -> str:
+    if cuda:
+        return (
+            "format=nv12,hwupload_cuda,"
+            f"scale_cuda=w={width}:h={height}:force_original_aspect_ratio=decrease:"
+            "force_divisible_by=2:interp_algo=bicubic:format=nv12,"
+            "hwdownload,format=nv12,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"
+        )
+    return (
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"
+    )
+
+
 def resize_clip_for_vertical(
     input_path: str | Path,
     output_path: str | Path,
-    mode: str = "crop",
     *,
     encoder: str = "auto",
     encoding_speed: str = "balanced",
@@ -18,27 +32,20 @@ def resize_clip_for_vertical(
     start: float | None = None,
     duration: float | None = None,
 ) -> Path:
-    """Convertit un clip en 9:16 sans déformer l'image."""
+    """Place une vidéo paysage entière dans un cadre 9:16, sans recadrage."""
     source, destination = Path(input_path), Path(output_path)
     if not source.is_file():
         raise FileNotFoundError(f"Vidéo introuvable : {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     preset = get_quality_preset(quality)
     width, height = preset.width, preset.height
-    software_filters = {
-        "crop": f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
-        "fit": f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black",
-    }
-    if mode not in software_filters:
-        raise ValueError("Le mode doit être 'crop' ou 'fit'.")
     if start is not None and start < 0:
         raise ValueError("Le début du clip ne peut pas être négatif.")
     if duration is not None and duration <= 0:
         raise ValueError("La durée du clip doit être positive.")
     resolved_encoder = resolve_video_encoder(encoder)
     use_cuda = (
-        mode == "crop"
-        and resolved_encoder == "h264_nvenc"
+        resolved_encoder == "h264_nvenc"
         and cuda_scaling_available()
     )
 
@@ -49,17 +56,7 @@ def resize_clip_for_vertical(
         command.extend(["-i", str(source)])
         if duration is not None:
             command.extend(["-t", str(duration)])
-        if cuda:
-            crop = (
-                "crop=w=if(gte(a\\,9/16)\\,trunc(ih*9/16/2)*2\\,iw)"
-                ":h=if(gte(a\\,9/16)\\,ih\\,trunc(iw*16/9/2)*2)"
-            )
-            video_filter = (
-                f"{crop},format=nv12,hwupload_cuda,"
-                f"scale_cuda=w={width}:h={height}:interp_algo=bicubic:format=nv12"
-            )
-        else:
-            video_filter = software_filters[mode]
+        video_filter = _vertical_filter(width, height, cuda=cuda)
         command.extend([
             "-vf", video_filter,
             *video_encoder_args(resolved_encoder, encoding_speed),
@@ -83,4 +80,4 @@ def resize_clip_for_vertical(
 
 
 def resize_clip_for_tiktok(input_path: str | Path, output_path: str | Path) -> Path:
-    return resize_clip_for_vertical(input_path, output_path, mode="crop")
+    return resize_clip_for_vertical(input_path, output_path)
