@@ -7,7 +7,7 @@ Application locale pour télécharger ou importer une vidéo, la découper en cl
 - téléchargement via une URL prise en charge par `yt-dlp` ;
 - import de fichiers MP4, MOV, MKV et WebM ;
 - découpage précis avec une durée configurable ;
-- export vertical 1080 × 1920 sans déformation ;
+- export vertical sans déformation en 720p, 1080p ou 4K ;
 - choix entre recadrage plein écran et conservation de l'image entière ;
 - accélération matérielle automatique NVIDIA NVENC, Intel Quick Sync ou AMD AMF ;
 - découpage et conversion verticale en une seule passe d'encodage ;
@@ -52,6 +52,10 @@ Au démarrage, l'application teste réellement les encodeurs disponibles et
 sélectionne automatiquement le premier GPU utilisable, dans cet ordre :
 NVIDIA NVENC, Intel Quick Sync, AMD AMF, puis CPU x264. Le choix actif est
 visible dans la barre latérale et le CPU reste sélectionnable manuellement.
+
+La qualité 4K télécharge la meilleure source disponible jusqu'à 2160p et
+produit un export vertical 2160 × 3840. Si la source n'existe pas en 4K,
+`yt-dlp` utilise la meilleure qualité inférieure disponible.
 
 Pour vérifier les encodeurs présents sous Windows :
 

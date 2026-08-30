@@ -8,6 +8,12 @@ from yt_dlp import YoutubeDL
 from src.paths import RAW_VIDEOS_DIR
 
 
+def _format_selector(max_height: int) -> str:
+    if max_height <= 0:
+        raise ValueError("La hauteur maximale doit être positive.")
+    return f"bv*[height<={max_height}]+ba/b[height<={max_height}]/b"
+
+
 def _validate_url(url: str) -> str:
     value = url.strip()
     parsed = urlparse(value)
@@ -16,15 +22,17 @@ def _validate_url(url: str) -> str:
     return value
 
 
-def download_video(video_url: str, output_dir: str | Path | None = None) -> str:
+def download_video(
+    video_url: str,
+    output_dir: str | Path | None = None,
+    max_height: int = 1080,
+) -> str:
     """Télécharge une vidéo et retourne avec certitude le fichier vidéo final."""
     url = _validate_url(video_url)
     destination = Path(output_dir or RAW_VIDEOS_DIR)
     destination.mkdir(parents=True, exist_ok=True)
     options = {
-        # L'export final est en 1080p : télécharger une source 4K ralentirait
-        # fortement le décodage sans améliorer le résultat.
-        "format": "bv*[height<=1080]+ba/b[height<=1080]/b",
+        "format": _format_selector(max_height),
         "merge_output_format": "mp4",
         "outtmpl": str(destination / "%(title).120B [%(id)s].%(ext)s"),
         "noplaylist": True,

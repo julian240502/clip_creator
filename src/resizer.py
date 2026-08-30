@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from src.encoder import resolve_video_encoder, video_encoder_args
+from src.quality import get_quality_preset
 
 
 def resize_clip_for_vertical(
@@ -12,6 +13,7 @@ def resize_clip_for_vertical(
     mode: str = "crop",
     *,
     encoder: str = "auto",
+    quality: str = "1080p",
     start: float | None = None,
     duration: float | None = None,
 ) -> Path:
@@ -20,9 +22,11 @@ def resize_clip_for_vertical(
     if not source.is_file():
         raise FileNotFoundError(f"Vidéo introuvable : {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    preset = get_quality_preset(quality)
+    width, height = preset.width, preset.height
     filters = {
-        "crop": "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-        "fit": "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
+        "crop": f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
+        "fit": f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black",
     }
     if mode not in filters:
         raise ValueError("Le mode doit être 'crop' ou 'fit'.")

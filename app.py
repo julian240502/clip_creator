@@ -9,6 +9,7 @@ import streamlit as st
 
 from src.encoder import encoder_label, resolve_video_encoder
 from src.pipeline import process_video
+from src.quality import get_quality_preset
 
 
 st.set_page_config(page_title="Clip Creator", page_icon="✦", layout="wide")
@@ -32,6 +33,14 @@ st.markdown("""<section class="hero"><div class="eyebrow">Studio vidéo local</d
 with st.sidebar:
     st.header("Réglages d'export")
     clip_length = st.slider("Durée d'un clip", 10, 180, 30, 5, format="%d sec")
+    quality_labels = {
+        "Full HD · 1080p — recommandé": "1080p",
+        "HD · 720p — plus rapide": "720p",
+        "4K · 2160p — meilleure qualité": "4k",
+    }
+    quality_label = st.selectbox("Qualité", list(quality_labels))
+    export_quality = quality_labels[quality_label]
+    quality = get_quality_preset(export_quality)
     vertical = st.toggle("Exporter en 9:16", value=True)
     mode_label = st.radio("Composition verticale", ["Recadrage plein écran", "Vidéo entière + bandes"], disabled=not vertical)
     vertical_mode = "crop" if mode_label.startswith("Recadrage") else "fit"
@@ -40,7 +49,10 @@ with st.sidebar:
     encoder_choice = st.selectbox("Accélération", [automatic_label, "CPU · x264"])
     encoder = "auto" if encoder_choice == automatic_label else "cpu"
     st.divider()
-    st.caption(f"1080 × 1920 · H.264 · AAC · {encoder_label(resolve_video_encoder(encoder))}")
+    dimensions = f"{quality.width} × {quality.height}" if vertical else f"source ≤ {quality.source_max_height}p"
+    st.caption(f"{dimensions} · H.264 · AAC · {encoder_label(resolve_video_encoder(encoder))}")
+    if export_quality == "4k":
+        st.caption("La 4K produit des fichiers plus lourds et demande plus de temps d'encodage.")
 
 with st.form("creator"):
     source_type = st.radio("Source", ["Lien vidéo", "Fichier local"], horizontal=True)
@@ -69,6 +81,7 @@ if submitted:
         project_dir, clips = process_video(
             url=url.strip() or None, uploaded_path=upload_path, clip_length=clip_length,
             vertical=vertical, vertical_mode=vertical_mode, encoder=encoder,
+            export_quality=export_quality,
             progress=update_progress,
         )
         st.success(f"{len(clips)} clip(s) prêt(s) pour le montage.")
