@@ -360,7 +360,7 @@ elif captions_on:
 
 # Accélération matérielle détectée automatiquement (NVENC / Quick Sync / AMF / CPU).
 encoder = "auto"
-encoding_speed = "balanced"
+encoding_speed = "fast"
 
 if st.button("Générer les clips  ✦", use_container_width=True):
     progress_bar = st.progress(0.0)
