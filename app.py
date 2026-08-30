@@ -20,7 +20,6 @@ from src.captions import (
     write_clip_captions,
 )
 from src.downloader import download_clip, probe_url
-from src.encoder import available_hardware_encoders, encoder_label, resolve_video_encoder
 from src.pipeline import process_video
 from src.quality import get_quality_preset
 from src.resizer import resize_clip_for_vertical
@@ -69,8 +68,8 @@ QUALITY_CHOICES = {
     "4K · 2160p — meilleure qualité": "4k",
 }
 BACKGROUND_CHOICES = {"Fond vidéo flouté — recommandé": "blur", "Bandes noires": "black"}
-SPEED_CHOICES = {"Rapide — recommandé": "fast", "Équilibrée": "balanced", "Qualité maximale": "quality"}
 PREVIEW_MODEL = "base"  # transcription rapide pour l'aperçu de style
+PREVIEW_QUALITY = "720p"  # l'aperçu reste léger quelle que soit la qualité d'export
 
 
 def session_dir() -> Path:
@@ -138,10 +137,10 @@ def _transcript_has_words(project_dir: str) -> bool:
         return False
 
 
-def render_style_preview(source: dict, at: float, style, quality_key: str, background: str) -> Path:
+def render_style_preview(source: dict, at: float, style, background: str) -> Path:
     short = _preview_source(source, at)
     duration = min(4.0, get_video_duration(short))
-    quality = get_quality_preset(quality_key)
+    quality = get_quality_preset(PREVIEW_QUALITY)
     # Modèle léger pour l'aperçu : on juge le style, pas la précision du texte.
     transcript = transcribe(short, model=PREVIEW_MODEL, cache_dir=session_dir())
     if not transcript.words:
@@ -155,7 +154,7 @@ def render_style_preview(source: dict, at: float, style, quality_key: str, backg
     )
     output = session_dir() / "preview" / "preview.mp4"
     resize_clip_for_vertical(
-        short, output, quality=quality_key, background=background,
+        short, output, quality=PREVIEW_QUALITY, background=background,
         start=0.0, duration=duration, encoding_speed="fast", captions_file=ass,
     )
     return output
@@ -224,14 +223,6 @@ if st.session_state.get("clips"):
                 "Télécharger tous les clips (.zip)", archive, "clips.zip",
                 "application/zip", use_container_width=True,
             )
-
-        transcript_file = Path(project_dir) / "transcript.json"
-        if transcript_file.is_file():
-            with transcript_file.open("rb") as handle:
-                st.download_button(
-                    "Télécharger la transcription (.json)", handle, "transcript.json",
-                    "application/json", use_container_width=True,
-                )
 
     columns = st.columns(3)
     for index, clip in enumerate(clips):
@@ -344,7 +335,7 @@ elif captions_on:
             with st.spinner("Rendu de l'aperçu…"):
                 try:
                     preview = render_style_preview(
-                        source, window[0] or 0.0, captions_style, quality_key, background,
+                        source, window[0] or 0.0, captions_style, background,
                     )
                     st.session_state["style_preview"] = str(preview)
                     st.session_state["style_preview_sig"] = style_sig
@@ -355,17 +346,11 @@ elif captions_on:
         if preview_path and Path(preview_path).is_file():
             if st.session_state.get("style_preview_sig") != style_sig:
                 st.caption("↻ Réglages modifiés depuis cet aperçu — recliquez pour rafraîchir.")
-            st.video(preview_path)
+            st.columns([1, 2])[0].video(preview_path)
 
-with st.expander("Avancé"):
-    detected = resolve_video_encoder("auto")
-    encoder_options = {f"Automatique · {encoder_label(detected)}": "auto"}
-    hardware_names = {"h264_nvenc": "nvidia", "h264_qsv": "intel", "h264_amf": "amd"}
-    for hardware_encoder in available_hardware_encoders():
-        encoder_options[encoder_label(hardware_encoder)] = hardware_names[hardware_encoder]
-    encoder_options["CPU · x264"] = "cpu"
-    encoder = encoder_options[st.selectbox("Accélération", list(encoder_options))]
-    encoding_speed = SPEED_CHOICES[st.selectbox("Vitesse d'encodage", list(SPEED_CHOICES))]
+# Accélération matérielle détectée automatiquement (NVENC / Quick Sync / AMF / CPU).
+encoder = "auto"
+encoding_speed = "balanced"
 
 if st.button("Générer les clips  ✦", use_container_width=True):
     progress_bar = st.progress(0.0)
