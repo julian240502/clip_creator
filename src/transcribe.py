@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from src.paths import TRANSCRIPTIONS_DIR
@@ -57,6 +58,14 @@ class Transcript:
 def transcription_available() -> bool:
     """True si faster-whisper est installé."""
     return importlib.util.find_spec("faster_whisper") is not None
+
+
+@lru_cache(maxsize=2)
+def _load_model(model: str, device: str, compute_type: str):
+    """Garde le modèle en mémoire : le chargement (long) n'a lieu qu'une fois par session."""
+    from faster_whisper import WhisperModel
+
+    return WhisperModel(model, device=device, compute_type=compute_type)
 
 
 def _resolve_backend() -> tuple[str, str]:
@@ -156,7 +165,6 @@ def transcribe(
             "faster-whisper n'est pas installé. "
             "Installez-le avec : pip install -r requirements-transcribe.txt"
         )
-    from faster_whisper import WhisperModel
 
     with tempfile.TemporaryDirectory() as tmp:
         wav = Path(tmp) / "audio.wav"
@@ -164,7 +172,7 @@ def transcribe(
         _extract_audio(source, wav)
         device, compute_type = _resolve_backend()
         report(0.15, f"Chargement du modèle {model} ({device})…")
-        whisper = WhisperModel(model, device=device, compute_type=compute_type)
+        whisper = _load_model(model, device, compute_type)
         report(0.25, "Transcription en cours…")
         segment_iter, info = whisper.transcribe(
             str(wav), language=language, word_timestamps=True, vad_filter=True,

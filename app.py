@@ -23,7 +23,7 @@ from src.downloader import download_clip, probe_url
 from src.pipeline import process_video
 from src.quality import get_quality_preset
 from src.resizer import resize_clip_for_vertical
-from src.transcribe import load_transcript, transcribe, transcription_available
+from src.transcribe import DEFAULT_MODEL, load_transcript, transcribe, transcription_available
 from src.video_splitter import get_video_duration, get_video_resolution
 
 st.set_page_config(page_title="Clip Creator", page_icon="✦", layout="wide")
@@ -68,7 +68,6 @@ QUALITY_CHOICES = {
     "4K · 2160p — meilleure qualité": "4k",
 }
 BACKGROUND_CHOICES = {"Fond vidéo flouté — recommandé": "blur", "Bandes noires": "black"}
-PREVIEW_MODEL = "base"  # transcription rapide pour l'aperçu de style
 PREVIEW_QUALITY = "720p"  # l'aperçu reste léger quelle que soit la qualité d'export
 
 
@@ -141,8 +140,8 @@ def render_style_preview(source: dict, at: float, style, background: str) -> Pat
     short = _preview_source(source, at)
     duration = min(4.0, get_video_duration(short))
     quality = get_quality_preset(PREVIEW_QUALITY)
-    # Modèle léger pour l'aperçu : on juge le style, pas la précision du texte.
-    transcript = transcribe(short, model=PREVIEW_MODEL, cache_dir=session_dir())
+    # Même modèle que le rendu final pour que le texte de l'aperçu soit fidèle.
+    transcript = transcribe(short, model=DEFAULT_MODEL, cache_dir=session_dir())
     if not transcript.words:
         raise RuntimeError(
             "Aucune parole détectée dans cet extrait — impossible de générer des sous-titres."
@@ -328,8 +327,8 @@ elif captions_on:
         )
         style_sig = json.dumps(asdict(captions_style), sort_keys=True)
         st.caption(
-            "1re fois : transcription (~1 min). Ensuite, changer une couleur ne "
-            "re-télécharge rien — le rendu prend quelques secondes."
+            "1er aperçu : transcription (~15-20 s le temps de charger le modèle). "
+            "Ensuite, changer un réglage ne re-transcrit rien — le rendu prend quelques secondes."
         )
         if st.button("Aperçu du style", use_container_width=True):
             with st.spinner("Rendu de l'aperçu…"):
@@ -346,7 +345,7 @@ elif captions_on:
         if preview_path and Path(preview_path).is_file():
             if st.session_state.get("style_preview_sig") != style_sig:
                 st.caption("↻ Réglages modifiés depuis cet aperçu — recliquez pour rafraîchir.")
-            st.columns([1, 2])[0].video(preview_path)
+            st.columns([1, 2, 1])[1].video(preview_path)
 
 # Accélération matérielle détectée automatiquement (NVENC / Quick Sync / AMF / CPU).
 encoder = "auto"
