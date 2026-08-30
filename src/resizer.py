@@ -3,11 +3,16 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from src.encoder import cuda_scaling_available, resolve_video_encoder, video_encoder_args
+from src.encoder import (
+    cuda_blur_compositing_available,
+    cuda_scaling_available,
+    resolve_video_encoder,
+    video_encoder_args,
+)
 from src.quality import get_quality_preset
 
 
-def _vertical_filter(width: int, height: int, *, cuda: bool) -> str:
+def _black_background_filter(width: int, height: int, *, cuda: bool) -> str:
     if cuda:
         return (
             "format=nv12,hwupload_cuda,"
@@ -22,6 +27,36 @@ def _vertical_filter(width: int, height: int, *, cuda: bool) -> str:
     )
 
 
+def _blur_background_filter(width: int, height: int, *, cuda: bool) -> str:
+    preview_width = max(180, width // 4)
+    preview_height = max(320, height // 4)
+    blur_radius = max(8, preview_width // 18)
+    if cuda:
+        return (
+            "[0:v]format=nv12,hwupload_cuda,split=2[background_source][foreground_source];"
+            f"[background_source]scale_cuda=w={preview_width}:h={preview_height}:"
+            "force_original_aspect_ratio=increase:force_divisible_by=2:"
+            "interp_algo=bicubic:format=nv12,hwdownload,format=nv12,"
+            f"crop={preview_width}:{preview_height},boxblur={blur_radius}:2,"
+            "hwupload_cuda,"
+            f"scale_cuda=w={width}:h={height}:interp_algo=bicubic:format=nv12[background];"
+            f"[foreground_source]scale_cuda=w={width}:h={height}:"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2:"
+            "interp_algo=bicubic:format=nv12[foreground];"
+            "[background][foreground]overlay_cuda=x=(W-w)/2:y=(H-h)/2[vout]"
+        )
+    return (
+        "[0:v]split=2[background_source][foreground_source];"
+        f"[background_source]scale={preview_width}:{preview_height}:"
+        "force_original_aspect_ratio=increase,"
+        f"crop={preview_width}:{preview_height},boxblur={blur_radius}:2,"
+        f"scale={width}:{height}[background];"
+        f"[foreground_source]scale={width}:{height}:"
+        "force_original_aspect_ratio=decrease[foreground];"
+        "[background][foreground]overlay=(W-w)/2:(H-h)/2,format=yuv420p[vout]"
+    )
+
+
 def resize_clip_for_vertical(
     input_path: str | Path,
     output_path: str | Path,
@@ -29,6 +64,7 @@ def resize_clip_for_vertical(
     encoder: str = "auto",
     encoding_speed: str = "balanced",
     quality: str = "1080p",
+    background: str = "blur",
     start: float | None = None,
     duration: float | None = None,
 ) -> Path:
@@ -39,15 +75,19 @@ def resize_clip_for_vertical(
     destination.parent.mkdir(parents=True, exist_ok=True)
     preset = get_quality_preset(quality)
     width, height = preset.width, preset.height
+    if background not in {"blur", "black"}:
+        raise ValueError("Le fond doit être 'blur' ou 'black'.")
     if start is not None and start < 0:
         raise ValueError("Le début du clip ne peut pas être négatif.")
     if duration is not None and duration <= 0:
         raise ValueError("La durée du clip doit être positive.")
     resolved_encoder = resolve_video_encoder(encoder)
-    use_cuda = (
-        resolved_encoder == "h264_nvenc"
-        and cuda_scaling_available()
+    cuda_available = (
+        cuda_blur_compositing_available()
+        if background == "blur"
+        else cuda_scaling_available()
     )
+    use_cuda = resolved_encoder == "h264_nvenc" and cuda_available
 
     def build_command(cuda: bool) -> list[str]:
         command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
@@ -56,11 +96,16 @@ def resize_clip_for_vertical(
         command.extend(["-i", str(source)])
         if duration is not None:
             command.extend(["-t", str(duration)])
-        video_filter = _vertical_filter(width, height, cuda=cuda)
-        command.extend([
-            "-vf", video_filter,
-            *video_encoder_args(resolved_encoder, encoding_speed),
-        ])
+        if background == "blur":
+            video_filter = _blur_background_filter(width, height, cuda=cuda)
+            command.extend([
+                "-filter_complex", video_filter,
+                "-map", "[vout]", "-map", "0:a?",
+            ])
+        else:
+            video_filter = _black_background_filter(width, height, cuda=cuda)
+            command.extend(["-vf", video_filter])
+        command.extend(video_encoder_args(resolved_encoder, encoding_speed))
         if not cuda:
             command.extend(["-pix_fmt", "yuv420p"])
         command.extend([

@@ -8,7 +8,8 @@ Application locale pour télécharger ou importer une vidéo, la découper en cl
 - import de fichiers MP4, MOV, MKV et WebM ;
 - découpage précis avec une durée configurable ;
 - export vertical sans déformation en 720p, 1080p ou 4K ;
-- conservation intégrale de la vidéo paysage avec des bandes noires en 9:16 ;
+- conservation intégrale de la vidéo paysage en 9:16 ;
+- choix entre un arrière-plan vidéo flouté et des bandes noires ;
 - accélération matérielle automatique NVIDIA NVENC, Intel Quick Sync ou AMD AMF ;
 - redimensionnement CUDA sur NVIDIA pour le recadrage vertical ;
 - profils d'encodage rapide, équilibré ou qualité maximale ;
@@ -59,6 +60,8 @@ sélectionnables manuellement.
 Avec une carte NVIDIA, le redimensionnement est confié à CUDA et l'encodage à
 NVENC. Le profil **Rapide** utilise le preset NVENC P1. La vidéo paysage reste
 entièrement visible dans le cadre vertical : aucun recadrage n'est appliqué.
+Par défaut, une copie agrandie et floutée de la vidéo remplit l'espace libre
+derrière l'image nette.
 
 La qualité 4K télécharge la meilleure source disponible jusqu'à 2160p et
 produit un export vertical 2160 × 3840. Si la source n'existe pas en 4K,

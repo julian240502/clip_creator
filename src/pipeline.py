@@ -27,6 +27,7 @@ def process_video(
     clip_length: int = 30, vertical: bool = True,
     encoder: str = "auto", export_quality: str = "1080p",
     encoding_speed: str = "balanced",
+    vertical_background: str = "blur",
     progress: ProgressCallback | None = None,
 ) -> tuple[Path, list[Path]]:
     """Exécute le pipeline et renvoie le dossier projet et les exports finaux."""
@@ -78,6 +79,7 @@ def process_video(
             resize_clip_for_vertical(
                 source, output, encoder=encoder,
                 encoding_speed=encoding_speed, quality=quality.key,
+                background=vertical_background,
                 start=start, duration=length,
             )
         )

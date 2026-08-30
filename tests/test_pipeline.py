@@ -5,7 +5,11 @@ import pytest
 
 from src.downloader import _format_selector, _validate_url
 from src.encoder import encoder_label, resolve_video_encoder, video_encoder_args
-from src.resizer import _vertical_filter, resize_clip_for_vertical
+from src.resizer import (
+    _black_background_filter,
+    _blur_background_filter,
+    resize_clip_for_vertical,
+)
 from src.video_splitter import get_video_duration, split_video
 
 
@@ -34,6 +38,7 @@ def test_vertical_export_preserves_landscape_video(
 ) -> None:
     output = resize_clip_for_vertical(
         sample_video, tmp_path / "vertical.mp4", encoder="cpu", quality="720p",
+        background="blur",
     )
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(output)],
@@ -61,12 +66,28 @@ def test_4k_vertical_export(sample_video: Path, tmp_path: Path) -> None:
     assert probe.stdout.strip() == "2160,3840"
 
 
-def test_cuda_filter_scales_then_adds_bands() -> None:
-    video_filter = _vertical_filter(1080, 1920, cuda=True)
+def test_cuda_black_filter_scales_then_adds_bands() -> None:
+    video_filter = _black_background_filter(1080, 1920, cuda=True)
     assert "scale_cuda=" in video_filter
     assert "force_original_aspect_ratio=decrease" in video_filter
     assert "hwdownload" in video_filter
     assert "pad=1080:1920" in video_filter
+
+
+def test_cuda_blur_filter_uses_blurred_copy_as_background() -> None:
+    video_filter = _blur_background_filter(1080, 1920, cuda=True)
+    assert "split=2" in video_filter
+    assert "boxblur=" in video_filter
+    assert "overlay_cuda=" in video_filter
+    assert "[foreground]" in video_filter
+
+
+def test_invalid_background_is_rejected(sample_video: Path, tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        resize_clip_for_vertical(
+            sample_video, tmp_path / "invalid.mp4",
+            encoder="cpu", background="transparent",
+        )
 
 
 def test_url_validation() -> None:

@@ -9,6 +9,7 @@ import streamlit as st
 
 from src.encoder import (
     available_hardware_encoders,
+    cuda_blur_compositing_available,
     cuda_scaling_available,
     encoder_label,
     resolve_video_encoder,
@@ -48,7 +49,15 @@ with st.sidebar:
     quality = get_quality_preset(export_quality)
     vertical = st.toggle("Exporter en 9:16", value=True)
     if vertical:
-        st.caption("La vidéo paysage entière sera conservée avec des bandes noires.")
+        background_options = {
+            "Fond vidéo flouté — recommandé": "blur",
+            "Bandes noires": "black",
+        }
+        background_choice = st.selectbox("Arrière-plan vertical", list(background_options))
+        vertical_background = background_options[background_choice]
+        st.caption("La vidéo paysage nette reste entièrement visible au premier plan.")
+    else:
+        vertical_background = "blur"
     detected_encoder = resolve_video_encoder("auto")
     automatic_label = f"Automatique · {encoder_label(detected_encoder)}"
     encoder_preferences = {
@@ -72,7 +81,12 @@ with st.sidebar:
     st.divider()
     dimensions = f"{quality.width} × {quality.height}" if vertical else f"source ≤ {quality.source_max_height}p"
     active_encoder = resolve_video_encoder(encoder)
-    cuda_active = vertical and active_encoder == "h264_nvenc" and cuda_scaling_available()
+    cuda_available = (
+        cuda_blur_compositing_available()
+        if vertical_background == "blur"
+        else cuda_scaling_available()
+    )
+    cuda_active = vertical and active_encoder == "h264_nvenc" and cuda_available
     cuda_label = " · redimensionnement CUDA" if cuda_active else ""
     st.caption(f"{dimensions} · H.264 · AAC · {encoder_label(active_encoder)}{cuda_label}")
     if export_quality == "4k":
@@ -106,6 +120,7 @@ if submitted:
             url=url.strip() or None, uploaded_path=upload_path, clip_length=clip_length,
             vertical=vertical, encoder=encoder,
             export_quality=export_quality, encoding_speed=encoding_speed,
+            vertical_background=vertical_background,
             progress=update_progress,
         )
         st.success(f"{len(clips)} clip(s) prêt(s) pour le montage.")
