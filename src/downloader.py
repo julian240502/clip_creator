@@ -85,7 +85,7 @@ def download_clip(
         raise ValueError("La fin de l'extrait doit être après le début.")
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
-    for stale in destination.glob("preview_source*"):
+    for stale in destination.glob("preview_source.*"):
         stale.unlink()
     options = {
         "format": _format_selector(max_height),
@@ -101,7 +101,17 @@ def download_clip(
     with YoutubeDL(options) as ydl:
         if not ydl.extract_info(url, download=True):
             raise RuntimeError("Aucune information vidéo reçue.")
-    return _newest_media(destination)
+    matches = sorted(
+        (
+            path for path in destination.glob("preview_source.*")
+            if path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}
+        ),
+        key=lambda path: path.stat().st_size,
+        reverse=True,
+    )
+    if not matches:
+        raise RuntimeError("Extrait téléchargé introuvable.")
+    return str(matches[0].resolve())
 
 
 def _newest_media(destination: Path) -> str:

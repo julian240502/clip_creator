@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
 import shutil
 import subprocess
 import tempfile
 import uuid
 import zipfile
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import streamlit as st
@@ -23,7 +24,7 @@ from src.encoder import available_hardware_encoders, encoder_label, resolve_vide
 from src.pipeline import process_video
 from src.quality import get_quality_preset
 from src.resizer import resize_clip_for_vertical
-from src.transcribe import DEFAULT_MODEL, transcribe, transcription_available
+from src.transcribe import transcribe, transcription_available
 from src.video_splitter import get_video_duration, get_video_resolution
 
 st.set_page_config(page_title="Clip Creator", page_icon="✦", layout="wide")
@@ -69,6 +70,7 @@ QUALITY_CHOICES = {
 }
 BACKGROUND_CHOICES = {"Fond vidéo flouté — recommandé": "blur", "Bandes noires": "black"}
 SPEED_CHOICES = {"Rapide — recommandé": "fast", "Équilibrée": "balanced", "Qualité maximale": "quality"}
+PREVIEW_MODEL = "base"  # transcription rapide pour l'aperçu de style
 
 
 def session_dir() -> Path:
@@ -80,7 +82,7 @@ def session_dir() -> Path:
 
 
 def reset_source() -> None:
-    for key in ("source", "clips", "project_dir", "style_preview"):
+    for key in ("source", "clips", "project_dir", "style_preview", "style_preview_sig", "preview_at"):
         st.session_state.pop(key, None)
     shutil.rmtree(session_dir(), ignore_errors=True)
 
@@ -103,20 +105,23 @@ def render_clip_card(clip: Path, key: str) -> None:
 
 
 def _preview_source(source: dict, at: float, seconds: float = 4.0) -> Path:
-    """Prépare un court extrait local (téléchargé ou coupé) pour l'aperçu de style."""
+    """Extrait court et local pour l'aperçu ; réutilisé tant que la portion ne change pas."""
     preview_dir = session_dir() / "preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
+    existing = next(preview_dir.glob("preview_source.*"), None)
+    if existing is not None and st.session_state.get("preview_at") == round(at, 2):
+        return existing
     if source["kind"] == "url":
-        return Path(download_clip(source["ref"], preview_dir, at, at + seconds, max_height=480))
-    clip = preview_dir / "preview_source.mp4"
-    command = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-ss", str(at), "-i", source["path"], "-t", str(seconds),
-        "-c", "copy", str(clip),
-    ]
-    if subprocess.run(command, capture_output=True).returncode != 0 or not clip.is_file():
-        command[-2:-1] = ["-c:v", "libx264", "-c:a", "aac"]  # repli si copy impossible
+        clip = Path(download_clip(source["ref"], preview_dir, at, at + seconds, max_height=480))
+    else:
+        clip = preview_dir / "preview_source.mp4"
+        command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", str(at), "-i", source["path"], "-t", str(seconds),
+            "-c:v", "libx264", "-c:a", "aac", str(clip),
+        ]
         subprocess.run(command, capture_output=True, check=True)
+    st.session_state["preview_at"] = round(at, 2)
     return clip
 
 
@@ -124,7 +129,8 @@ def render_style_preview(source: dict, at: float, style, quality_key: str, backg
     short = _preview_source(source, at)
     duration = min(4.0, get_video_duration(short))
     quality = get_quality_preset(quality_key)
-    transcript = transcribe(short, model=DEFAULT_MODEL, cache_dir=session_dir())
+    # Modèle léger pour l'aperçu : on juge le style, pas la précision du texte.
+    transcript = transcribe(short, model=PREVIEW_MODEL, cache_dir=session_dir())
     ass = write_clip_captions(
         transcript, session_dir() / "preview" / "preview.ass",
         clip_start=0.0, clip_end=duration,
@@ -310,19 +316,26 @@ elif captions_on:
             primary_color=primary_color, highlight_color=highlight_color,
             mode=CAPTION_MODES[mode_label], uppercase=uppercase,
         )
-        st.caption("La transcription (~1-3 min) est faite une fois puis réutilisée.")
-        if st.button("Aperçu du style (~4 s)", use_container_width=True):
+        style_sig = json.dumps(asdict(captions_style), sort_keys=True)
+        st.caption(
+            "1re fois : transcription (~1 min). Ensuite, changer une couleur ne "
+            "re-télécharge rien — le rendu prend quelques secondes."
+        )
+        if st.button("Aperçu du style", use_container_width=True):
             with st.spinner("Rendu de l'aperçu…"):
                 try:
                     preview = render_style_preview(
                         source, window[0] or 0.0, captions_style, quality_key, background,
                     )
                     st.session_state["style_preview"] = str(preview)
+                    st.session_state["style_preview_sig"] = style_sig
                 except Exception as exc:  # noqa: BLE001 - message affiché tel quel
                     st.session_state.pop("style_preview", None)
                     st.error(f"Aperçu impossible : {exc}")
         preview_path = st.session_state.get("style_preview")
         if preview_path and Path(preview_path).is_file():
+            if st.session_state.get("style_preview_sig") != style_sig:
+                st.caption("↻ Réglages modifiés depuis cet aperçu — recliquez pour rafraîchir.")
             st.video(preview_path)
 
 with st.expander("Avancé"):
