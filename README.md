@@ -11,8 +11,8 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
 - prévisualisation de la source avant traitement, avec métadonnées ;
 - sélection d'une portion de la vidéo à clipper et estimation du nombre de clips ;
 - découpage précis avec une durée configurable ;
-- export vertical sans déformation en 720p, 1080p ou 4K ;
-- conservation intégrale de la vidéo paysage en 9:16 ;
+- choix du format d'export : 9:16, 4:5, 1:1, 16:9 ou format d'origine, en 720p / 1080p / 4K ;
+- la vidéo source tient entièrement dans le cadre, sans déformation ;
 - choix entre un arrière-plan vidéo flouté et des bandes noires ;
 - accélération matérielle automatique NVIDIA NVENC, Intel Quick Sync ou AMD AMF ;
 - redimensionnement CUDA sur NVIDIA pour le recadrage vertical ;
@@ -23,7 +23,9 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
 - sous-titres animés incrustés (optionnel) : styles, police, taille, couleur, position,
   et modes d'apparition mot actif / karaoké / mot par mot / ligne par ligne ;
 - deux modes de découpage : **régulier** (durée fixe) et **sélection intelligente**
-  (repère les extraits au plus fort potentiel viral, les note et les classe).
+  (repère les extraits au plus fort potentiel viral, les note et les classe) ;
+- titres, descriptions et hashtags générés par clip (optionnel), dans un `.txt`
+  joint à chaque vidéo et à l'archive ZIP.
 
 ## Sélection intelligente (optionnel)
 
