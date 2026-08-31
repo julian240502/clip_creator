@@ -38,10 +38,12 @@ suit le visage principal**. Nécessite OpenCV :
 python -m pip install -r requirements-reframe.txt
 ```
 
-Avant le rendu, une passe d'analyse (~45 s pour 10 min) échantillonne la vidéo, détecte le
-visage frontal le plus grand (Haar / OpenCV, CPU), lisse la trajectoire (EMA + zone morte),
-et pilote un `crop` dynamique FFmpeg via `sendcmd`. Sans OpenCV, ou si aucun visage n'est
-détecté, on retombe sur un recadrage centré.
+Avant le rendu, une passe d'analyse (~5 s pour 10 min — seules les images-clés sont
+décodées) détecte le visage frontal le plus grand (Haar / OpenCV, CPU, multi-thread),
+rééchantillonne et **lisse** la trajectoire (fenêtre glissante ~1,2 s + limite de vitesse),
+puis pilote le filtre `crop` via une **expression `x(t)` continue** (évaluée à chaque image,
+pas de saccades). Sans OpenCV, ou si aucun visage n'est détecté, on retombe sur un
+recadrage centré.
 
 ## Sélection intelligente (optionnel)
 

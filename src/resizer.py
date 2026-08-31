@@ -19,12 +19,13 @@ ClipCallback = Callable[[Path], None]
 BACKGROUNDS = {"blur", "black", "reframe"}
 
 
-def _reframe_filter(source: Path, width: int, height: int, cmd_name: str) -> str:
+def _reframe_filter(source: Path, width: int, height: int, x_expr: str) -> str:
     src_w, src_h = get_video_resolution(source)
     crop_w, crop_h = crop_box(src_w, src_h, width, height)
-    x0, y0 = (src_w - crop_w) // 2, (src_h - crop_h) // 2
+    y0 = (src_h - crop_h) // 2
+    # x est une expression du temps évaluée à chaque image -> mouvement continu.
     return (
-        f"sendcmd=f={cmd_name},crop={crop_w}:{crop_h}:{x0}:{y0},"
+        f"crop={crop_w}:{crop_h}:x='{x_expr}':y={y0},"
         f"scale={width}:{height},setsar=1,format=yuv420p"
     )
 
@@ -82,7 +83,7 @@ def resize_clip_for_vertical(
     start: float | None = None,
     duration: float | None = None,
     captions_file: str | Path | None = None,
-    crop_cmd_file: str | Path | None = None,
+    reframe_x_expr: str | None = None,
 ) -> Path:
     """Recadre la vidéo source dans le cadre au ratio choisi (fond flou / bandes / visage)."""
     # FFmpeg tourne depuis le dossier de sortie : le chemin source doit être absolu.
@@ -94,9 +95,8 @@ def resize_clip_for_vertical(
     destination.parent.mkdir(parents=True, exist_ok=True)
     run_dir = destination.parent
     captions_name = _prepare_sidecar(captions_file, run_dir) if captions_file is not None else None
-    crop_name = _prepare_sidecar(crop_cmd_file, run_dir) if crop_cmd_file is not None else None
-    if background == "reframe" and crop_name is None:
-        raise ValueError("Le recadrage visage exige un fichier sendcmd.")
+    if background == "reframe" and not reframe_x_expr:
+        raise ValueError("Le recadrage visage exige une expression x(t).")
     width, height = frame_size(quality, aspect)
     if start is not None and start < 0:
         raise ValueError("Le début du clip ne peut pas être négatif.")
@@ -127,7 +127,7 @@ def resize_clip_for_vertical(
                 "-map", "[vout]", "-map", "0:a?",
             ])
         elif background == "reframe":
-            video_filter = _reframe_filter(source, width, height, crop_name)
+            video_filter = _reframe_filter(source, width, height, reframe_x_expr)
             if captions_name:
                 video_filter += f",ass={captions_name}"
             command.extend(["-vf", video_filter])
@@ -176,7 +176,7 @@ def segment_vertical(
     aspect: str = "9:16",
     background: str = "blur",
     captions_file: str | Path | None = None,
-    crop_cmd_file: str | Path | None = None,
+    reframe_x_expr: str | None = None,
     on_clip: ClipCallback | None = None,
 ) -> list[Path]:
     """Découpe + reformat en une seule passe FFmpeg (segment muxer).
@@ -201,9 +201,8 @@ def segment_vertical(
     resolved_encoder = resolve_video_encoder(encoder)
 
     captions_name = _prepare_sidecar(captions_file, out) if captions_file is not None else None
-    crop_name = _prepare_sidecar(crop_cmd_file, out) if crop_cmd_file is not None else None
-    if background == "reframe" and crop_name is None:
-        raise ValueError("Le recadrage visage exige un fichier sendcmd.")
+    if background == "reframe" and not reframe_x_expr:
+        raise ValueError("Le recadrage visage exige une expression x(t).")
 
     command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                "-ss", str(window_start), "-i", str(source), "-t", str(span)]
@@ -213,7 +212,7 @@ def segment_vertical(
             video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
         command += ["-filter_complex", video_filter, "-map", "[vout]", "-map", "0:a?"]
     elif background == "reframe":
-        video_filter = _reframe_filter(source, width, height, crop_name)
+        video_filter = _reframe_filter(source, width, height, reframe_x_expr)
         if captions_name:
             video_filter += f",ass={captions_name}"
         command += ["-vf", video_filter]
