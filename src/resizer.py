@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -17,6 +18,18 @@ from src.video_splitter import get_video_resolution
 
 ClipCallback = Callable[[Path], None]
 BACKGROUNDS = {"blur", "black", "reframe"}
+
+
+def _cuda_blur_enabled() -> bool:
+    """Accélère le montage du fond flou via CUDA (expérimental, opt-in).
+
+    `overlay_cuda` sort des zones vertes sur certains builds : ici seul le
+    redimensionnement passe sur GPU, la composition reste logicielle. Activer
+    avec la variable d'environnement CLIP_CREATOR_CUDA_BLUR=1 pour benchmarker.
+    """
+    return os.environ.get("CLIP_CREATOR_CUDA_BLUR", "").strip().lower() in {
+        "1", "true", "on", "yes",
+    }
 
 
 def _reframe_filter(source: Path, width: int, height: int, cmd_name: str) -> str:
@@ -54,11 +67,29 @@ def _black_background_filter(width: int, height: int, *, cuda: bool) -> str:
     )
 
 
-def _blur_background_filter(width: int, height: int) -> str:
+def _blur_background_filter(width: int, height: int, *, cuda: bool = False) -> str:
     preview_width = max(180, width // 4)
     preview_height = max(320, height // 4)
     # Un flou modéré garde le fond identifiable sans concurrencer le premier plan.
     blur_radius = max(6, preview_width // 28)
+    if cuda:
+        # Les deux mises à l'échelle (fond réduit, premier plan cadré) passent sur
+        # GPU ; boxblur (pas de variante CUDA) opère sur la vignette minuscule et
+        # l'overlay reste logiciel — on évite overlay_cuda et ses zones vertes.
+        return (
+            "[0:v]split=2[bg_src][fg_src];"
+            "[bg_src]format=nv12,hwupload_cuda,"
+            f"scale_cuda=w={preview_width}:h={preview_height}:"
+            "force_original_aspect_ratio=increase:force_divisible_by=2:interp_algo=bicubic,"
+            "hwdownload,format=nv12,"
+            f"crop={preview_width}:{preview_height},boxblur={blur_radius}:2,"
+            f"scale={width}:{height}[background];"
+            "[fg_src]format=nv12,hwupload_cuda,"
+            f"scale_cuda=w={width}:h={height}:"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2:interp_algo=bicubic,"
+            "hwdownload,format=nv12[foreground];"
+            "[background][foreground]overlay=(W-w)/2:(H-h)/2,format=yuv420p[vout]"
+        )
     return (
         "[0:v]split=2[background_source][foreground_source];"
         f"[background_source]scale={preview_width}:{preview_height}:"
@@ -104,12 +135,12 @@ def resize_clip_for_vertical(
     if duration is not None and duration <= 0:
         raise ValueError("La durée du clip doit être positive.")
     resolved_encoder = resolve_video_encoder(encoder)
-    # overlay_cuda produit des zones vertes avec certains builds Windows.
-    # Le fond flouté reste en filtres logiciels, tout en conservant NVENC.
+    # « black » : chaîne CUDA éprouvée. « blur » : accélération opt-in (benchmark),
+    # seul le scaling passe sur GPU, la composition reste logicielle.
     use_cuda = (
-        background == "black"
-        and resolved_encoder == "h264_nvenc"
+        resolved_encoder == "h264_nvenc"
         and cuda_scaling_available()
+        and (background == "black" or (background == "blur" and _cuda_blur_enabled()))
     )
 
     def build_command(cuda: bool) -> list[str]:
@@ -120,7 +151,7 @@ def resize_clip_for_vertical(
         if duration is not None:
             command.extend(["-t", str(duration)])
         if background == "blur":
-            video_filter = _blur_background_filter(width, height)
+            video_filter = _blur_background_filter(width, height, cuda=cuda)
             if captions_name:
                 video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
             command.extend([
@@ -206,54 +237,70 @@ def segment_vertical(
     if background == "reframe" and crop_name is None:
         raise ValueError("Le recadrage visage exige un script sendcmd.")
 
-    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-               "-ss", str(window_start), "-i", str(source), "-t", str(span)]
-    if background == "blur":
-        video_filter = _blur_background_filter(width, height)
-        if captions_name:
-            video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
-        command += ["-filter_complex", video_filter, "-map", "[vout]", "-map", "0:a?"]
-    elif background == "reframe":
-        video_filter = _reframe_filter(source, width, height, crop_name)
-        if captions_name:
-            video_filter += f",ass={captions_name}"
-        command += ["-vf", video_filter]
-    else:
-        video_filter = _black_background_filter(width, height, cuda=False)
-        if captions_name:
-            video_filter += f",format=yuv420p,ass={captions_name}"
-        command += ["-vf", video_filter]
-    # IDR forcé à chaque coupe + petite tolérance pour que le muxer tranche
-    # exactement sur ces keyframes (sinon il rate la 1re coupe quand il y a de l'audio).
-    command += ["-force_key_frames", f"expr:gte(t,n_forced*{clip_length})"]
-    command += video_encoder_args(resolved_encoder, encoding_speed)
-    command += [
-        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
-        "-f", "segment", "-segment_time", str(clip_length), "-segment_time_delta", "0.1",
-        "-reset_timestamps", "1", "-segment_start_number", "1",
-        "-segment_format", "mp4", "-segment_format_options", "movflags=+faststart",
-        "clip_%03d.mp4",
-    ]
-
-    proc = subprocess.Popen(
-        command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, cwd=str(out),
+    use_cuda = (
+        resolved_encoder == "h264_nvenc"
+        and cuda_scaling_available()
+        and (background == "black" or (background == "blur" and _cuda_blur_enabled()))
     )
-    emitted: set[str] = set()
-    clips: list[Path] = []
-    while True:
-        finished = proc.poll() is not None
-        present = sorted(out.glob("clip_*.mp4"))
-        ready = present if finished else present[:-1]
-        for path in ready:
-            if path.name not in emitted:
-                emitted.add(path.name)
-                clips.append(path)
-                if on_clip is not None:
-                    on_clip(path)
-        if finished:
-            break
-        time.sleep(0.4)
-    stderr = proc.communicate()[1]
-    if proc.returncode != 0:
+
+    def build_command(cuda: bool) -> list[str]:
+        command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                   "-ss", str(window_start), "-i", str(source), "-t", str(span)]
+        if background == "blur":
+            video_filter = _blur_background_filter(width, height, cuda=cuda)
+            if captions_name:
+                video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
+            command += ["-filter_complex", video_filter, "-map", "[vout]", "-map", "0:a?"]
+        elif background == "reframe":
+            video_filter = _reframe_filter(source, width, height, crop_name)
+            if captions_name:
+                video_filter += f",ass={captions_name}"
+            command += ["-vf", video_filter]
+        else:
+            video_filter = _black_background_filter(width, height, cuda=cuda)
+            if captions_name:
+                video_filter += f",format=yuv420p,ass={captions_name}"
+            command += ["-vf", video_filter]
+        # IDR forcé à chaque coupe + petite tolérance pour que le muxer tranche
+        # exactement sur ces keyframes (sinon il rate la 1re coupe quand il y a de l'audio).
+        command += ["-force_key_frames", f"expr:gte(t,n_forced*{clip_length})"]
+        command += video_encoder_args(resolved_encoder, encoding_speed)
+        command += [
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+            "-f", "segment", "-segment_time", str(clip_length), "-segment_time_delta", "0.1",
+            "-reset_timestamps", "1", "-segment_start_number", "1",
+            "-segment_format", "mp4", "-segment_format_options", "movflags=+faststart",
+            "clip_%03d.mp4",
+        ]
+        return command
+
+    def run(command: list[str]) -> tuple[int, str, list[Path]]:
+        proc = subprocess.Popen(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, cwd=str(out),
+        )
+        emitted: set[str] = set()
+        found: list[Path] = []
+        while True:
+            finished = proc.poll() is not None
+            present = sorted(out.glob("clip_*.mp4"))
+            ready = present if finished else present[:-1]
+            for path in ready:
+                if path.name not in emitted:
+                    emitted.add(path.name)
+                    found.append(path)
+                    if on_clip is not None:
+                        on_clip(path)
+            if finished:
+                break
+            time.sleep(0.4)
+        return proc.returncode, proc.communicate()[1], found
+
+    code, stderr, clips = run(build_command(use_cuda))
+    if code != 0 and use_cuda and not clips:
+        # Échec à l'init CUDA : on repart proprement sur la chaîne logicielle.
+        for stale in out.glob("clip_*.mp4"):
+            stale.unlink()
+        code, stderr, clips = run(build_command(False))
+    if code != 0:
         raise RuntimeError(stderr.strip() or "Échec du découpage vertical FFmpeg.")
     return clips

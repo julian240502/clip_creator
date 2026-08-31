@@ -172,6 +172,15 @@ def test_blur_filter_uses_compatible_software_composition() -> None:
     assert "[foreground]" in video_filter
 
 
+def test_cuda_blur_filter_scales_on_gpu_but_composites_on_cpu() -> None:
+    video_filter = _blur_background_filter(1080, 1920, cuda=True)
+    assert video_filter.count("scale_cuda=") == 2   # fond réduit + premier plan
+    assert "hwupload_cuda" in video_filter and "hwdownload" in video_filter
+    assert "boxblur=9:2" in video_filter            # flou toujours logiciel
+    assert "overlay=" in video_filter
+    assert "overlay_cuda" not in video_filter       # jamais : zones vertes
+
+
 def test_invalid_background_is_rejected(sample_video: Path, tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         resize_clip_for_vertical(

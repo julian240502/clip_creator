@@ -351,7 +351,8 @@ def render_style_preview(source: dict, at: float, style, aspect: str, background
 
 def render_diagnostics() -> None:
     """Panneau latéral du mode avancé : détails techniques masqués par défaut."""
-    from src.encoder import encoder_label, resolve_video_encoder
+    from src.encoder import cuda_scaling_available, encoder_label, resolve_video_encoder
+    from src.resizer import _cuda_blur_enabled
 
     st.markdown("**Diagnostic**")
     llm_model = pick_model() if ollama_available() else None
@@ -360,11 +361,16 @@ def render_diagnostics() -> None:
         video_encoder = encoder_label(resolve_video_encoder("auto"))
     except Exception:  # noqa: BLE001 - aucun encodeur matériel/logiciel utilisable
         video_encoder = "indisponible"
+    if not cuda_scaling_available():
+        blur_mode = "indisponible"
+    else:
+        blur_mode = "CUDA (opt-in actif)" if _cuda_blur_enabled() else "logiciel"
     st.markdown(
         f"- IA locale : {f'`{llm_model}`' if llm_model else '_absente_'}\n"
         f"- Transcription : {f'`{whisper}`' if whisper else '_absente_'}\n"
         f"- Recadrage visage : {'ok' if reframe_available() else '_absent_'}\n"
-        f"- Encodeur vidéo : `{video_encoder}`"
+        f"- Encodeur vidéo : `{video_encoder}`\n"
+        f"- Fond flou : {blur_mode}"
     )
     st.caption(f"Session · `{session_dir()}`")
     st.caption(f"Cache sources · `{SOURCE_CACHE_DIR}`")
