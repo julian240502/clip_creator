@@ -100,9 +100,19 @@ def reset_source() -> None:
     shutil.rmtree(session_dir(), ignore_errors=True)
 
 
+def _highlight_thumb(media: str, at: float, out: Path) -> str | None:
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(max(at, 0.0)),
+        "-i", media, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "4", str(out),
+    ]
+    if subprocess.run(command, capture_output=True).returncode == 0 and out.is_file():
+        return str(out)
+    return None
+
+
 def analyse_highlights(source: dict, quality_key: str, target_count: int,
                        dur_min: float, dur_max: float) -> tuple[list[dict], str | None]:
-    """Télécharge (si URL), transcrit, puis note les moments. Renvoie (highlights, modèle)."""
+    """Télécharge (si URL), transcrit, note les moments et en extrait une vignette."""
     if source["kind"] == "url":
         max_h = get_quality_preset(quality_key).source_max_height
         media = download_source(source["ref"], SOURCE_CACHE_DIR, max_height=max_h)
@@ -114,7 +124,16 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         transcript, target_count=target_count,
         min_duration=float(dur_min), max_duration=float(dur_max), model=model,
     )
-    return [asdict(item) for item in found], model
+    thumbs_dir = session_dir() / "highlights"
+    shutil.rmtree(thumbs_dir, ignore_errors=True)
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
+    items = []
+    for index, item in enumerate(found):
+        data = asdict(item)
+        middle = (item.start + item.end) / 2
+        data["thumb"] = _highlight_thumb(media, middle, thumbs_dir / f"hl_{index:02d}.jpg")
+        items.append(data)
+    return items, model
 
 
 def timecode(seconds: float) -> str:
@@ -466,18 +485,28 @@ if smart:
         )
         picks: list[tuple[float, float]] = []
         for index, item in enumerate(highlights):
+            score = int(item["score"])
+            tone = "#3ddc84" if score >= 75 else "#ffb020" if score >= 50 else "#ff5a5f"
             with st.container(border=True):
-                head = st.columns([1, 7, 2])
-                keep = head[0].checkbox(
+                row = st.columns([0.6, 2, 5, 1.6])
+                keep = row[0].checkbox(
                     "sel", value=index < min(3, len(highlights)),
                     key=f"hl-{index}", label_visibility="collapsed",
                 )
-                head[1].markdown(f"**{item['title']}**")
-                head[1].caption(
+                if item.get("thumb") and Path(item["thumb"]).is_file():
+                    row[1].image(item["thumb"], use_container_width=True)
+                row[2].markdown(f"**{item['title']}**")
+                row[2].caption(
                     f"{timecode(item['start'])} – {timecode(item['end'])} · "
                     f"{int(item['end'] - item['start'])} s"
                 )
-                head[2].markdown(f"### {item['score']}")
+                row[3].markdown(
+                    "<div style='text-align:right;line-height:1.05'>"
+                    f"<span style='font-size:2rem;font-weight:800;color:{tone}'>{score}</span>"
+                    "<div style='font-size:.6rem;letter-spacing:.06em;color:#9a9db0;"
+                    "text-transform:uppercase'>viralité / 100</div></div>",
+                    unsafe_allow_html=True,
+                )
                 st.write(item["summary"])
                 with st.expander("Pourquoi ce score"):
                     for reason in item["reasons"]:
