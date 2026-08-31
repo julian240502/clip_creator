@@ -26,7 +26,7 @@ from src.llm import ollama_available, pick_model
 from src.llm import prewarm as prewarm_llm
 from src.paths import SOURCE_CACHE_DIR
 from src.pipeline import process_video
-from src.quality import get_quality_preset
+from src.quality import ASPECT_USAGE, frame_size, get_quality_preset
 from src.resizer import resize_clip_for_vertical
 from src.transcribe import (
     DEFAULT_MODEL,
@@ -79,6 +79,30 @@ QUALITY_CHOICES = {
     "4K · 2160p — meilleure qualité": "4k",
 }
 BACKGROUND_CHOICES = {"Fond vidéo flouté — recommandé": "blur", "Bandes noires": "black"}
+FORMAT_CHOICES = {
+    "9:16 · Vertical": "9:16",
+    "4:5 · Portrait": "4:5",
+    "1:1 · Carré": "1:1",
+    "16:9 · Paysage": "16:9",
+    "Format d'origine": "source",
+}
+
+
+def format_rect_svg(aspect: str, box: int = 60) -> str:
+    ratio_w, ratio_h = (16, 9) if aspect == "16:9" else {
+        "9:16": (9, 16), "4:5": (4, 5), "1:1": (1, 1),
+    }.get(aspect, (9, 16))
+    if ratio_w >= ratio_h:
+        rw, rh = box, round(box * ratio_h / ratio_w)
+    else:
+        rw, rh = round(box * ratio_w / ratio_h), box
+    return (
+        f"<svg width='{rw}' height='{rh}' viewBox='0 0 {rw} {rh}' style='vertical-align:middle'>"
+        f"<rect x='2' y='2' width='{rw - 4}' height='{rh - 4}' rx='4' "
+        "fill='#7774ff33' stroke='#8b87ff' stroke-width='2'/></svg>"
+    )
+
+
 PREVIEW_QUALITY = "720p"  # l'aperçu reste léger quelle que soit la qualité d'export
 
 
@@ -197,18 +221,19 @@ def _transcript_has_words(project_dir: str) -> bool:
         return False
 
 
-def render_captions_controls(source: dict, window, vertical: bool, background: str):
+def render_captions_controls(source: dict, window, aspect: str, background: str):
     """Toggle + panneau de style des sous-titres. Renvoie le CaptionStyle ou None."""
     ready = transcription_available()
+    reframed = aspect != "source"
     enabled = st.toggle(
-        "Sous-titres incrustés", value=False, disabled=not (ready and vertical),
+        "Sous-titres incrustés", value=False, disabled=not (ready and reframed),
         key="captions_on",
     )
     if not ready:
         st.caption("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
         return None
-    if not vertical:
-        st.caption("Les sous-titres ne sont disponibles que sur l'export 9:16.")
+    if not reframed:
+        st.caption("Les sous-titres ne s'ajoutent qu'à un export recadré (pas au format d'origine).")
         return None
     if not enabled:
         return None
@@ -250,7 +275,9 @@ def render_captions_controls(source: dict, window, vertical: bool, background: s
         if st.button("Aperçu du style", use_container_width=True):
             with st.spinner("Rendu de l'aperçu…"):
                 try:
-                    preview = render_style_preview(source, window[0] or 0.0, style, background)
+                    preview = render_style_preview(
+                        source, window[0] or 0.0, style, aspect, background,
+                    )
                     st.session_state["style_preview"] = str(preview)
                     st.session_state["style_preview_sig"] = style_sig
                 except Exception as exc:  # noqa: BLE001 - message affiché tel quel
@@ -264,13 +291,13 @@ def render_captions_controls(source: dict, window, vertical: bool, background: s
     return style
 
 
-def render_style_preview(source: dict, at: float, style, background: str) -> Path:
+def render_style_preview(source: dict, at: float, style, aspect: str, background: str) -> Path:
     total = source.get("duration")
     if total:
         at = max(0.0, min(at, total - 4.0)) if total > 4.0 else 0.0
     short = _preview_source(source, at)
     duration = min(4.0, get_video_duration(short))
-    quality = get_quality_preset(PREVIEW_QUALITY)
+    frame_w, frame_h = frame_size(PREVIEW_QUALITY, aspect)
     # Même modèle que le rendu final pour que le texte de l'aperçu soit fidèle.
     transcript = transcribe(short, model=DEFAULT_MODEL, cache_dir=session_dir())
     if not transcript.words:
@@ -280,11 +307,11 @@ def render_style_preview(source: dict, at: float, style, background: str) -> Pat
     ass = write_clip_captions(
         transcript, session_dir() / "preview" / "preview.ass",
         clip_start=0.0, clip_end=duration,
-        width=quality.width, height=quality.height, style=style,
+        width=frame_w, height=frame_h, style=style,
     )
     output = session_dir() / "preview" / "preview.mp4"
     resize_clip_for_vertical(
-        short, output, quality=PREVIEW_QUALITY, background=background,
+        short, output, quality=PREVIEW_QUALITY, aspect=aspect, background=background,
         start=0.0, duration=duration, encoding_speed="fast", captions_file=ass,
     )
     return output
@@ -398,11 +425,29 @@ with meta:
 
 st.subheader("Réglages")
 quality_key = QUALITY_CHOICES[st.selectbox("Qualité", list(QUALITY_CHOICES))]
-vertical = st.toggle("Exporter en 9:16", value=True)
+
+format_label = st.radio(
+    "Format d'export", list(FORMAT_CHOICES), horizontal=True,
+    captions=[
+        "Vidéo telle quelle" if key == "source"
+        else f"{'×'.join(map(str, frame_size(quality_key, key)))} · {ASPECT_USAGE[key]}"
+        for key in FORMAT_CHOICES.values()
+    ],
+)
+export_format = FORMAT_CHOICES[format_label]
+vertical = export_format != "source"
+
 background = "blur"
 if vertical:
-    background = BACKGROUND_CHOICES[st.selectbox("Arrière-plan vertical", list(BACKGROUND_CHOICES))]
-    st.caption("La vidéo paysage nette reste entièrement visible au premier plan.")
+    frame_w, frame_h = frame_size(quality_key, export_format)
+    st.markdown(
+        f"<div style='display:flex;align-items:center;gap:.7rem;margin:.1rem 0 .5rem'>"
+        f"{format_rect_svg(export_format)}"
+        f"<span style='color:#bcbfd0;font-size:.82rem'>Cadre {frame_w} × {frame_h} px "
+        f"— la vidéo entière tient dedans, le reste est comblé.</span></div>",
+        unsafe_allow_html=True,
+    )
+    background = BACKGROUND_CHOICES[st.selectbox("Arrière-plan", list(BACKGROUND_CHOICES))]
 
 smart = st.radio(
     "Découpage", ["Régulier", "Sélection intelligente"], horizontal=True,
@@ -466,7 +511,7 @@ encoding_speed = "fast"
 # apparaissent après la liste des moments (juste avant « Générer »).
 captions_style = None
 if not smart:
-    captions_style = render_captions_controls(source, window, vertical, background)
+    captions_style = render_captions_controls(source, window, export_format, background)
 
 # --- Phase 2.5 : choisir les moments (mode intelligent) -----------------------
 clips_windows: list[tuple[float, float]] | None = None
@@ -518,7 +563,7 @@ if smart:
         clips_windows = picks
 
         st.markdown("#### Finalisation")
-        captions_style = render_captions_controls(source, window, vertical, background)
+        captions_style = render_captions_controls(source, window, export_format, background)
         subtitle_state = "activés" if captions_style else "désactivés"
         st.caption(f"Sous-titres : **{subtitle_state}** · {len(picks)} clip(s) coché(s).")
         gen_label = f"Générer {len(picks)} clip(s)  ✦"
@@ -546,6 +591,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             uploaded_path=source["path"] if source["kind"] == "file" else None,
             clip_length=clip_length,
             vertical=vertical,
+            export_format=export_format,
             encoder=encoder,
             export_quality=quality_key,
             encoding_speed=encoding_speed,

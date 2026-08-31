@@ -11,7 +11,7 @@ from src.encoder import (
     resolve_video_encoder,
     video_encoder_args,
 )
-from src.quality import get_quality_preset
+from src.quality import frame_size
 
 ClipCallback = Callable[[Path], None]
 
@@ -55,12 +55,13 @@ def resize_clip_for_vertical(
     encoder: str = "auto",
     encoding_speed: str = "balanced",
     quality: str = "1080p",
+    aspect: str = "9:16",
     background: str = "blur",
     start: float | None = None,
     duration: float | None = None,
     captions_file: str | Path | None = None,
 ) -> Path:
-    """Place une vidéo paysage entière dans un cadre 9:16, sans recadrage."""
+    """Place la vidéo source entière dans un cadre au ratio choisi, sans recadrage."""
     source, destination = Path(input_path), Path(output_path)
     if not source.is_file():
         raise FileNotFoundError(f"Vidéo introuvable : {source}")
@@ -75,8 +76,7 @@ def resize_clip_for_vertical(
         captions_name = captions_path.name
         if captions_path.parent.resolve() != destination.parent.resolve():
             shutil.copyfile(captions_path, destination.parent / captions_name)
-    preset = get_quality_preset(quality)
-    width, height = preset.width, preset.height
+    width, height = frame_size(quality, aspect)
     if background not in {"blur", "black"}:
         raise ValueError("Le fond doit être 'blur' ou 'black'.")
     if start is not None and start < 0:
@@ -146,11 +146,12 @@ def segment_vertical(
     encoder: str = "auto",
     encoding_speed: str = "fast",
     quality: str = "1080p",
+    aspect: str = "9:16",
     background: str = "blur",
     captions_file: str | Path | None = None,
     on_clip: ClipCallback | None = None,
 ) -> list[Path]:
-    """Découpe + format vertical en une seule passe FFmpeg (segment muxer).
+    """Découpe + reformat en une seule passe FFmpeg (segment muxer).
 
     La source n'est décodée qu'une fois, le graphe de filtres et l'encodeur ne
     sont initialisés qu'une fois. `on_clip` est appelé au fil des segments écrits.
@@ -168,8 +169,7 @@ def segment_vertical(
     out.mkdir(parents=True, exist_ok=True)
     for stale in out.glob("clip_*.mp4"):
         stale.unlink()
-    preset = get_quality_preset(quality)
-    width, height = preset.width, preset.height
+    width, height = frame_size(quality, aspect)
     resolved_encoder = resolve_video_encoder(encoder)
 
     captions_name: str | None = None

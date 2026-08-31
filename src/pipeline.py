@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from src.downloader import download_source
 from src.encoder import encoder_label, resolve_video_encoder
 from src.paths import DATA_DIR, SOURCE_CACHE_DIR
-from src.quality import get_quality_preset
+from src.quality import frame_size, get_quality_preset
 from src.resizer import resize_clip_for_vertical, segment_vertical
 from src.transcribe import DEFAULT_MODEL
 from src.video_splitter import (
@@ -35,6 +35,7 @@ def _project_name(name: str) -> str:
 def process_video(
     *, url: str | None = None, uploaded_path: str | Path | None = None,
     clip_length: int = 30, vertical: bool = True,
+    export_format: str = "9:16",
     encoder: str = "auto", export_quality: str = "1080p",
     encoding_speed: str = "balanced",
     vertical_background: str = "blur",
@@ -58,6 +59,7 @@ def process_video(
     source_dir = project_dir / "source"
     source_dir.mkdir(parents=True, exist_ok=False)
     quality = get_quality_preset(export_quality)
+    frame_w, frame_h = frame_size(export_quality, export_format)
     if url:
         report(0.08, f"Téléchargement de la vidéo · maximum {quality.label}…")
         source = Path(
@@ -119,11 +121,11 @@ def process_video(
                 clip_captions = write_clip_captions(
                     transcript, output.with_suffix(".ass"),
                     clip_start=clip_start, clip_end=clip_end,
-                    width=quality.width, height=quality.height, style=captions_style,
+                    width=frame_w, height=frame_h, style=captions_style,
                 )
             clip_path = resize_clip_for_vertical(
                 source, output, encoder=encoder, encoding_speed=encoding_speed,
-                quality=quality.key, background=vertical_background,
+                quality=quality.key, aspect=export_format, background=vertical_background,
                 start=clip_start, duration=clip_end - clip_start, captions_file=clip_captions,
             )
             exports.append(clip_path)
@@ -141,7 +143,7 @@ def process_video(
         captions_file = write_clip_captions(
             transcript, project_dir / "vertical" / "captions.ass",
             clip_start=window_start, clip_end=window_end,
-            width=quality.width, height=quality.height, style=captions_style,
+            width=frame_w, height=frame_h, style=captions_style,
         )
     done = {"n": 0}
 
@@ -157,7 +159,7 @@ def process_video(
         source, project_dir / "vertical",
         clip_length=clip_length, window_start=window_start, window_end=window_end,
         encoder=encoder, encoding_speed=encoding_speed, quality=quality.key,
-        background=vertical_background, captions_file=captions_file,
+        aspect=export_format, background=vertical_background, captions_file=captions_file,
         on_clip=_on_segment,
     )
     report(1.0, "Exports terminés")

@@ -111,6 +111,24 @@ def test_segment_vertical_cuts_and_reframes_in_one_pass(
     assert get_video_duration(clips[1]) == pytest.approx(1, abs=0.25)
 
 
+def test_frame_size_matches_the_requested_aspect() -> None:
+    from src.quality import frame_size
+
+    assert frame_size("1080p", "9:16") == (1080, 1920)
+    assert frame_size("1080p", "1:1") == (1080, 1080)
+    assert frame_size("1080p", "4:5") == (1080, 1350)
+    assert frame_size("1080p", "16:9") == (1920, 1080)
+    assert frame_size("720p", "16:9") == (1280, 720)
+
+
+def test_resize_clip_honours_the_aspect(sample_video: Path, tmp_path: Path) -> None:
+    output = resize_clip_for_vertical(
+        sample_video, tmp_path / "sq.mp4", encoder="cpu", quality="720p",
+        aspect="1:1", background="black", start=0.0, duration=1.0,
+    )
+    assert get_video_resolution(output) == (720, 720)
+
+
 def test_vertical_export_preserves_landscape_video(
     sample_video: Path, tmp_path: Path,
 ) -> None:
