@@ -289,6 +289,8 @@ def render_captions_controls(source: dict, window, aspect: str, background: str)
             "Le modèle se charge en arrière-plan. Le 1er aperçu prend quelques secondes de plus, "
             "les suivants sont quasi instantanés."
         )
+        if background == "reframe":
+            st.caption("L'aperçu utilise un recadrage centré ; le rendu final suivra le visage.")
         if st.button("Aperçu du style", use_container_width=True):
             with st.spinner("Rendu de l'aperçu…"):
                 try:
@@ -326,10 +328,23 @@ def render_style_preview(source: dict, at: float, style, aspect: str, background
         clip_start=0.0, clip_end=duration,
         width=frame_w, height=frame_h, style=style,
     )
+    crop_cmd = None
+    if background == "reframe":
+        # L'aperçu sert à juger le style des sous-titres : recadrage centré, sans
+        # passe de détection (le rendu final, lui, suit le visage).
+        from src.reframe import centred_crop_path, crop_box, write_sendcmd
+
+        src_w, src_h = get_video_resolution(short)
+        crop_w, crop_h = crop_box(src_w, src_h, frame_w, frame_h)
+        crop_cmd = write_sendcmd(
+            session_dir() / "preview" / "preview.cmd",
+            centred_crop_path(src_w, src_h, crop_w, crop_h),
+        )
     output = session_dir() / "preview" / "preview.mp4"
     resize_clip_for_vertical(
         short, output, quality=PREVIEW_QUALITY, aspect=aspect, background=background,
         start=0.0, duration=duration, encoding_speed="fast", captions_file=ass,
+        crop_cmd_file=crop_cmd,
     )
     return output
 
@@ -603,6 +618,22 @@ if smart:
             + (f" · {n_hooked} avec une accroche forte ⚡" if n_hooked else "")
             + (f" · modèle `{model_used}`" if ADVANCED and model_used else "")
         )
+        n_highlights = len(highlights)
+        for i in range(n_highlights):
+            st.session_state.setdefault(f"hl-{i}", i < min(3, n_highlights))
+
+        def _toggle_all_highlights() -> None:
+            target = st.session_state["hl-all"]
+            for i in range(len(st.session_state.get("highlights") or [])):
+                st.session_state[f"hl-{i}"] = target
+
+        n_selected = sum(st.session_state[f"hl-{i}"] for i in range(n_highlights))
+        st.session_state["hl-all"] = n_selected == n_highlights
+        st.checkbox(
+            f"Tout sélectionner ({n_selected}/{n_highlights})",
+            key="hl-all", on_change=_toggle_all_highlights,
+        )
+
         picks: list[tuple[float, float]] = []
         pick_hints: list[tuple[str, str]] = []
         for index, item in enumerate(highlights):
@@ -611,8 +642,7 @@ if smart:
             with st.container(border=True):
                 row = st.columns([0.6, 2, 5, 1.6])
                 keep = row[0].checkbox(
-                    "sel", value=index < min(3, len(highlights)),
-                    key=f"hl-{index}", label_visibility="collapsed",
+                    "sel", key=f"hl-{index}", label_visibility="collapsed",
                 )
                 if item.get("thumb") and Path(item["thumb"]).is_file():
                     row[1].image(item["thumb"], use_container_width=True)
