@@ -24,7 +24,7 @@ _PTS_RE = re.compile(r"pts_time:\s*([0-9.]+)")
 
 SAMPLE_FPS = 1.0          # fréquence d'analyse des visages
 DOWNSCALE = 320           # largeur d'analyse (px)
-RESAMPLE_HZ = 10.0        # rééchantillonnage de la trajectoire avant lissage
+COMMAND_HZ = 15.0         # densité des commandes sendcmd (pré-lissées -> mouvement continu)
 SMOOTH_WINDOW_S = 1.2     # fenêtre du lissage symétrique (double passe)
 MAX_VEL_FRAC = 0.10       # vitesse max du cadre : fraction de largeur / seconde
 
@@ -34,12 +34,11 @@ class CropPath:
     crop_w: int
     crop_h: int
     y0: int
-    x_expr: str                                        # expression FFmpeg pour `crop:x`
-    points: list[tuple[float, int]] = field(default_factory=list)  # (t rebasé, x) de contrôle
+    events: list[tuple[float, int]] = field(default_factory=list)  # (t rebasé, x) — dense
 
     @property
     def x0(self) -> int:
-        return self.points[0][1] if self.points else 0
+        return self.events[0][1] if self.events else 0
 
 
 def reframe_available() -> bool:
@@ -177,18 +176,6 @@ def _smooth(values: list[float], half: int) -> list[float]:
     return out
 
 
-def _x_expression(points: list[tuple[float, int]], max_x: int) -> str:
-    if len(points) == 1:
-        return str(points[0][1])
-    expr = str(points[-1][1])
-    for (t0, x0), (t1, x1) in zip(reversed(points[:-1]), reversed(points[1:]), strict=True):
-        gap = t1 - t0
-        segment = str(x1) if gap < 1e-3 else f"({x0}+({x1 - x0})*(t-{t0:.3f})/{gap:.3f})"
-        expr = f"if(lt(t,{t1:.3f}),{segment},{expr})"
-    expr = f"if(lt(t,{points[0][0]:.3f}),{points[0][1]},{expr})"
-    return f"clip({expr},0,{max_x})"
-
-
 def crop_path(
     track: list[tuple[float, float | None]],
     source_w: int,
@@ -199,7 +186,7 @@ def crop_path(
     t_start: float = 0.0,
     t_end: float | None = None,
 ) -> CropPath:
-    """Trajectoire de crop lissée sous forme d'expression FFmpeg, rebasée à t=0."""
+    """Trajectoire de crop lissée, rebasée à t=0, en commandes denses (x en pixels source)."""
     y0 = (source_h - crop_h) // 2
     max_x = source_w - crop_w
     if max_x <= 0 or not any(value is not None for _t, value in track):
@@ -210,36 +197,37 @@ def crop_path(
     lo = max(t_start - 0.5, filled[0][0])
     hi = max(lo + 0.2, end + 0.5)
     smooth = _smooth(
-        _resample(filled, RESAMPLE_HZ, lo, hi),
-        max(1, int(SMOOTH_WINDOW_S * RESAMPLE_HZ / 2)),
+        _resample(filled, COMMAND_HZ, lo, hi),
+        max(1, int(SMOOTH_WINDOW_S * COMMAND_HZ / 2)),
     )
     pixels = [min(max(cx * source_w - crop_w / 2, 0.0), max_x) for cx in smooth]
 
-    max_step = MAX_VEL_FRAC * source_w / RESAMPLE_HZ
+    max_step = MAX_VEL_FRAC * source_w / COMMAND_HZ
     for i in range(1, len(pixels)):
         delta = max(-max_step, min(max_step, pixels[i] - pixels[i - 1]))
         pixels[i] = pixels[i - 1] + delta
 
-    samples = [
-        (round(lo + i / RESAMPLE_HZ - t_start, 3), int(round(x)))
+    events = [
+        (round(t, 3), int(round(x)))
         for i, x in enumerate(pixels)
-        if lo + i / RESAMPLE_HZ - t_start >= -0.05
-    ] or [(0.0, int(round(pixels[0])))]
-
-    points = [(max(samples[0][0], 0.0), samples[0][1])]
-    for t, x in samples[1:]:
-        if abs(x - points[-1][1]) >= 2:
-            points.append((t, x))
-    if points[-1] != samples[-1]:
-        points.append(samples[-1])
-    if len(points) > 160:
-        stride = len(points) // 160 + 1
-        points = points[::stride] + [points[-1]]
-
-    return CropPath(crop_w, crop_h, y0, _x_expression(points, max_x), points)
+        if (t := lo + i / COMMAND_HZ - t_start) >= -1.0 / COMMAND_HZ
+    ]
+    if not events:
+        events = [(0.0, int(round(pixels[0])))]
+    if events[0][0] > 0.0:
+        events.insert(0, (0.0, events[0][1]))
+    return CropPath(crop_w, crop_h, y0, events)
 
 
 def centred_crop_path(source_w: int, source_h: int, crop_w: int, crop_h: int) -> CropPath:
     x0 = (source_w - crop_w) // 2
     y0 = (source_h - crop_h) // 2
-    return CropPath(crop_w, crop_h, y0, str(x0), [(0.0, x0)])
+    return CropPath(crop_w, crop_h, y0, [(0.0, x0)])
+
+
+def write_sendcmd(path: str | Path, crop: CropPath) -> Path:
+    lines = "\n".join(f"{max(t, 0.0):.3f} crop x {x};" for t, x in crop.events)
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(lines + "\n", encoding="utf-8")
+    return destination

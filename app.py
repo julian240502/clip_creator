@@ -578,11 +578,9 @@ if smart:
                     unsafe_allow_html=True,
                 )
                 st.write(item["summary"])
-                with st.expander("Pourquoi ce score"):
-                    for reason in item["reasons"]:
-                        st.markdown(f"- {reason}")
-                    extract = item["transcript"]
-                    st.caption(extract[:500] + ("…" if len(extract) > 500 else ""))
+                reasons = item.get("reasons") or []
+                if reasons:
+                    st.caption(" · ".join(reasons))
             if keep:
                 picks.append((float(item["start"]), float(item["end"])))
                 pick_hints.append((str(item["title"]), str(item["summary"])))
