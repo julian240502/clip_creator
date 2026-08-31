@@ -32,6 +32,26 @@ def _project_name(name: str) -> str:
     return slug[:60] or "video"
 
 
+def _window_text(transcript, start: float, end: float) -> str:
+    return " ".join(
+        word.text.strip() for word in transcript.words
+        if word.end > start and word.start < end
+    ).strip()
+
+
+def _write_metadata_files(exports, windows, transcript, model, hints) -> None:
+    from src.metadata import generate_metadata, write_metadata
+
+    for index, clip_path in enumerate(exports):
+        clip_start, clip_end = windows[index]
+        hint_title, hint_summary = hints[index] if hints and index < len(hints) else ("", "")
+        meta = generate_metadata(
+            _window_text(transcript, clip_start, clip_end),
+            hint_title=hint_title, hint_summary=hint_summary, model=model,
+        )
+        write_metadata(meta, Path(clip_path).with_suffix(".txt"))
+
+
 def process_video(
     *, url: str | None = None, uploaded_path: str | Path | None = None,
     clip_length: int = 30, vertical: bool = True,
@@ -45,6 +65,9 @@ def process_video(
     transcribe: bool = False,
     transcribe_model: str = DEFAULT_MODEL,
     captions_style: CaptionStyle | None = None,
+    generate_meta: bool = False,
+    meta_model: str | None = None,
+    clips_hints: list[tuple[str, str]] | None = None,
     on_clip: ClipCallback | None = None,
     progress: ProgressCallback | None = None,
 ) -> tuple[Path, list[Path]]:
@@ -130,6 +153,9 @@ def process_video(
             )
             exports.append(clip_path)
             notify_clip(clip_path)
+        if generate_meta and transcript is not None and transcript.words:
+            report(0.96, "Titres & hashtags…")
+            _write_metadata_files(exports, windows, transcript, meta_model, clips_hints)
         report(1.0, "Exports terminés")
         return project_dir, exports
     # Découpage + format vertical en UNE passe : la source n'est décodée qu'une
@@ -162,5 +188,13 @@ def process_video(
         aspect=export_format, background=vertical_background, captions_file=captions_file,
         on_clip=_on_segment,
     )
+    if generate_meta and transcript is not None and transcript.words:
+        report(0.96, "Titres & hashtags…")
+        seg_windows = [
+            (window_start + k * clip_length,
+             min(window_start + (k + 1) * clip_length, window_end))
+            for k in range(len(exports))
+        ]
+        _write_metadata_files(exports, seg_windows, transcript, meta_model, None)
     report(1.0, "Exports terminés")
     return project_dir, exports

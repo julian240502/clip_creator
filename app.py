@@ -170,6 +170,10 @@ def timecode(seconds: float) -> str:
 def render_clip_card(clip: Path, key: str) -> None:
     st.video(str(clip))
     st.caption(clip.name)
+    sidecar = clip.with_suffix(".txt")
+    if sidecar.is_file():
+        with st.expander("Titre & hashtags"):
+            st.code(sidecar.read_text(encoding="utf-8"), language=None)
     with clip.open("rb") as handle:
         st.download_button(
             "Télécharger", handle, clip.name, "video/mp4",
@@ -375,6 +379,9 @@ if st.session_state.get("clips"):
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
             for clip in clips:
                 archive.write(clip, clip.name)
+                sidecar = clip.with_suffix(".txt")
+                if sidecar.is_file():
+                    archive.write(sidecar, sidecar.name)
         with archive_path.open("rb") as archive:
             st.download_button(
                 "Télécharger tous les clips (.zip)", archive, "clips.zip",
@@ -515,6 +522,7 @@ if not smart:
 
 # --- Phase 2.5 : choisir les moments (mode intelligent) -----------------------
 clips_windows: list[tuple[float, float]] | None = None
+clips_hints: list[tuple[str, str]] | None = None
 gen_label = "Générer les clips  ✦"
 gen_disabled = False
 if smart:
@@ -529,6 +537,7 @@ if smart:
             f"Notés par {model_used}." if model_used else "Notation heuristique (Ollama absent)."
         )
         picks: list[tuple[float, float]] = []
+        pick_hints: list[tuple[str, str]] = []
         for index, item in enumerate(highlights):
             score = int(item["score"])
             tone = "#3ddc84" if score >= 75 else "#ffb020" if score >= 50 else "#ff5a5f"
@@ -560,7 +569,9 @@ if smart:
                     st.caption(extract[:500] + ("…" if len(extract) > 500 else ""))
             if keep:
                 picks.append((float(item["start"]), float(item["end"])))
+                pick_hints.append((str(item["title"]), str(item["summary"])))
         clips_windows = picks
+        clips_hints = pick_hints
 
         st.markdown("#### Finalisation")
         captions_style = render_captions_controls(source, window, export_format, background)
@@ -568,6 +579,19 @@ if smart:
         st.caption(f"Sous-titres : **{subtitle_state}** · {len(picks)} clip(s) coché(s).")
         gen_label = f"Générer {len(picks)} clip(s)  ✦"
         gen_disabled = not picks
+
+meta_ready = transcription_available()
+meta_on = st.toggle(
+    "Générer titres & hashtags", value=False, disabled=not meta_ready, key="meta_on",
+)
+if not meta_ready:
+    st.caption("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
+elif meta_on:
+    st.caption(
+        "Un fichier .txt (titre, description, hashtags) par clip — "
+        + ("généré par Ollama." if ollama_available() else "génération heuristique (Ollama absent).")
+    )
+meta_model = pick_model() if (meta_on and ollama_available()) else None
 
 if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
     progress_bar = st.progress(0.0)
@@ -600,6 +624,9 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             source_end=window[1],
             clips_windows=clips_windows,
             captions_style=captions_style,
+            generate_meta=meta_on,
+            meta_model=meta_model,
+            clips_hints=clips_hints,
             on_clip=on_clip,
             progress=on_progress,
         )
