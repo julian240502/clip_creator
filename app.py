@@ -194,11 +194,11 @@ def render_clip_card(clip: Path, key: str) -> None:
         )
 
 
-def _preview_source(source: dict, at: float, seconds: float = 4.0) -> Path:
+def _preview_source(source: dict, at: float, seconds: float = 4.0, max_height: int = 480) -> Path:
     """Extrait court et local pour l'aperçu ; réutilisé tant que la portion ne change pas."""
     preview_dir = session_dir() / "preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
-    marker = round(at, 2)
+    marker = (round(at, 2), max_height)
     existing = next(preview_dir.glob("preview_source.*"), None)
     if existing is not None and existing.is_file() and st.session_state.get("preview_at") == marker:
         return existing
@@ -207,7 +207,7 @@ def _preview_source(source: dict, at: float, seconds: float = 4.0) -> Path:
     for stale in preview_dir.glob("preview_source.*"):
         stale.unlink(missing_ok=True)
     if source["kind"] == "url":
-        clip = Path(download_clip(source["ref"], preview_dir, at, at + seconds, max_height=480))
+        clip = Path(download_clip(source["ref"], preview_dir, at, at + seconds, max_height=max_height))
     else:
         clip = preview_dir / "preview_source.mp4"
         result = subprocess.run(
@@ -314,7 +314,9 @@ def render_style_preview(source: dict, at: float, style, aspect: str, background
     total = source.get("duration")
     if total:
         at = max(0.0, min(at, total - 4.0)) if total > 4.0 else 0.0
-    short = _preview_source(source, at)
+    # Le recadrage découpe une tranche verticale : il faut une source assez nette
+    # pour ne pas l'agrandir. Le flou / les bandes tolèrent un extrait plus léger.
+    short = _preview_source(source, at, max_height=720 if background == "reframe" else 480)
     duration = min(4.0, get_video_duration(short))
     frame_w, frame_h = frame_size(PREVIEW_QUALITY, aspect)
     # Même modèle que le rendu final pour que le texte de l'aperçu soit fidèle.
@@ -362,9 +364,11 @@ def render_diagnostics() -> None:
     except Exception:  # noqa: BLE001 - aucun encodeur matériel/logiciel utilisable
         video_encoder = "indisponible"
     if not cuda_scaling_available():
-        blur_mode = "indisponible"
+        blur_mode = "logiciel (CUDA indisponible)"
+    elif _cuda_blur_enabled():
+        blur_mode = "CUDA"
     else:
-        blur_mode = "CUDA (opt-in actif)" if _cuda_blur_enabled() else "logiciel"
+        blur_mode = "logiciel (CLIP_CREATOR_CUDA_BLUR=0)"
     st.markdown(
         f"- IA locale : {f'`{llm_model}`' if llm_model else '_absente_'}\n"
         f"- Transcription : {f'`{whisper}`' if whisper else '_absente_'}\n"
