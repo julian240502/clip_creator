@@ -101,7 +101,7 @@ def reset_source() -> None:
 
 
 def analyse_highlights(source: dict, quality_key: str, target_count: int,
-                       dur_min: int, dur_max: int) -> tuple[list[dict], str | None]:
+                       dur_min: float, dur_max: float) -> tuple[list[dict], str | None]:
     """Télécharge (si URL), transcrit, puis note les moments. Renvoie (highlights, modèle)."""
     if source["kind"] == "url":
         max_h = get_quality_preset(quality_key).source_max_height
@@ -416,10 +416,14 @@ else:
             threading.Thread(target=prewarm_llm, daemon=True).start()
     col_n, col_d = st.columns(2)
     target_count = col_n.slider("Nombre de clips visés", 3, 15, 8)
-    dur_min, dur_max = col_d.slider("Durée cible (s)", 15, 90, (20, 60))
+    dur_max = col_d.slider("Durée max d'un clip (s)", 20, 120, 60, 5)
+    dur_min = max(12.0, round(dur_max * 0.4))
     st.caption(
-        f"Notation par **{rater}** (Ollama)." if rater
-        else "Ollama non détecté — notation heuristique (lance `ollama serve` pour mieux)."
+        f"Extraits de ~{int(dur_min)} à {dur_max} s. "
+        + (
+            f"Notation par **{rater}** (Ollama)." if rater
+            else "Ollama non détecté — notation heuristique (lance `ollama serve` pour mieux)."
+        )
     )
     if st.button("Analyser les moments", use_container_width=True):
         with st.spinner("Analyse : téléchargement, transcription, notation…"):
