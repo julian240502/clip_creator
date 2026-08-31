@@ -6,8 +6,11 @@ from src import llm
 from src.highlights import (
     _candidate_windows,
     _dedupe,
+    _looks_raw,
+    _normalise_rating,
     _pre_score,
     _sentences,
+    _short_label,
     find_highlights,
 )
 from src.transcribe import Transcript, TranscriptSegment, Word
@@ -65,6 +68,40 @@ def test_find_highlights_heuristic_only_is_sorted_and_bounded() -> None:
     for h in result:
         assert h.title and h.summary and h.reasons
         assert h.end > h.start
+
+
+_RAW = (
+    "mal du coup avec du recul tu en as quels souvenirs mais franchement "
+    "c'est quand même une belle période parce que quand tu as 15 ans tu te dis"
+)
+
+
+def test_short_label_is_capped_capitalised_and_not_mid_word() -> None:
+    label = _short_label(_RAW, 10)
+    assert label.split(" ")[0] == "Mal"          # capitalisé
+    assert label.endswith("…")                    # tronqué proprement
+    assert len(label.split(" ")) <= 11            # 10 mots + ellipse
+
+
+def test_looks_raw_flags_a_transcript_dump_not_a_real_title() -> None:
+    assert _looks_raw(_RAW, _RAW) is True
+    assert _looks_raw("le titre en minuscule", _RAW) is True
+    assert _looks_raw("Le vrai souvenir de ses 15 ans", _RAW) is False
+    assert _looks_raw(_short_label(_RAW, 10), _RAW) is False  # le repli n'est pas "raw"
+
+
+def test_normalise_rating_rescues_a_raw_llm_title() -> None:
+    fixed = _normalise_rating({"score": 55, "title": _RAW, "summary": _RAW}, _RAW)
+    assert fixed["title"] == _short_label(_RAW, 10)
+    assert fixed["title"] != fixed["summary"]
+    assert len(fixed["title"]) < len(_RAW)
+
+
+def test_normalise_rating_keeps_a_good_llm_title() -> None:
+    good = _normalise_rating(
+        {"score": 72, "title": "Ses 15 ans, une belle période", "summary": "Elle en parle."}, _RAW,
+    )
+    assert good["title"] == "Ses 15 ans, une belle période"
 
 
 def test_find_highlights_empty_transcript() -> None:

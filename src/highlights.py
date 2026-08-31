@@ -25,7 +25,6 @@ _DANGLING_RE = re.compile(
     re.IGNORECASE,
 )
 _NUMBER_RE = re.compile(r"\d")
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
 
 
 @dataclass(frozen=True)
@@ -108,8 +107,8 @@ def _dedupe(
     return kept
 
 
-_BATCH_SIZE = 6
-_SYSTEM_PROMPT = (
+_BATCH_SIZE = 4
+_SYSTEM_BATCH = (
     "Tu es un expert du montage de clips courts viraux (TikTok, Reels, Shorts). "
     "On te donne une liste numérotée d'extraits (transcriptions). Pour CHAQUE extrait, évalue "
     "le potentiel viral. Réponds UNIQUEMENT en JSON : "
@@ -117,14 +116,42 @@ _SYSTEM_PROMPT = (
     '"title": "<accroche FR, max 12 mots>", "summary": "<une phrase: de quoi ça parle>", '
     '"reasons": ["<justif courte FR>", ...]}, ...]} — un objet par extrait, dans l\'ordre.'
 )
+_SYSTEM_ONE = (
+    "Tu es un expert des clips courts viraux. À partir de la transcription d'un extrait, "
+    'réponds UNIQUEMENT en JSON : {"score": <entier 0-100>, "title": "<accroche FR, max 12 mots, '
+    'pas la transcription brute>", "summary": "<une phrase: de quoi parle l\'extrait>", '
+    '"reasons": ["<justification courte FR>", ...]}.'
+)
+
+
+def _short_label(text: str, max_words: int) -> str:
+    words = re.sub(r"\s+", " ", text.strip()).split()
+    label = " ".join(words[:max_words]).rstrip(" ,;:.—-")
+    if len(words) > max_words:
+        label += "…"
+    return (label[:1].upper() + label[1:]) if label else "Extrait"
+
+
+def _looks_raw(value: str, text: str) -> bool:
+    """Un titre qui n'est en fait qu'un long bout de transcription brute."""
+    value = value.strip()
+    if not value or value[:1].islower():
+        return True
+    return len(value) > 70 and value.lower()[:40] == text.strip().lower()[:40]
 
 
 def _normalise_rating(raw: dict, fallback_text: str) -> dict:
     reasons = [str(r).strip() for r in raw.get("reasons", []) if str(r).strip()]
+    title = str(raw.get("title") or "").strip()
+    if _looks_raw(title, fallback_text):
+        title = _short_label(fallback_text, 10)
+    summary = str(raw.get("summary") or "").strip()
+    if _looks_raw(summary, fallback_text) and summary.lower()[:20] == title.lower()[:20]:
+        summary = _short_label(fallback_text, 26)
     return {
         "score": max(0, min(100, int(float(raw.get("score", 50))))),
-        "title": (str(raw.get("title") or "").strip() or _first_sentence(fallback_text))[:90],
-        "summary": str(raw.get("summary") or "").strip() or _first_sentence(fallback_text),
+        "title": title[:110],
+        "summary": summary or _short_label(fallback_text, 26),
         "reasons": reasons[:3],
     }
 
@@ -133,7 +160,7 @@ def _rate_batch_with_llm(texts: list[str], model: str) -> list[dict | None]:
     from src.llm import chat_json
 
     body = "\n\n".join(f"[{index}] {text}" for index, text in enumerate(texts))
-    data = chat_json(_SYSTEM_PROMPT, body, model=model, timeout=180.0)
+    data = chat_json(_SYSTEM_BATCH, body, model=model, timeout=180.0)
     items = data.get("clips") or data.get("results") or data.get("extraits") or []
     aligned: list[dict | None] = [None] * len(texts)
     for position, item in enumerate(items):
@@ -148,8 +175,11 @@ def _rate_batch_with_llm(texts: list[str], model: str) -> list[dict | None]:
     return aligned
 
 
-def _first_sentence(text: str) -> str:
-    return _SENTENCE_SPLIT_RE.split(text.strip())[0][:140]
+def _rate_one_with_llm(text: str, model: str) -> dict:
+    from src.llm import chat_json
+
+    data = chat_json(_SYSTEM_ONE, f'Transcription :\n"""\n{text}\n"""', model=model, timeout=60.0)
+    return _normalise_rating(data, text)
 
 
 def _rate_heuristic(text: str, pre: float) -> dict:
@@ -164,8 +194,8 @@ def _rate_heuristic(text: str, pre: float) -> dict:
         reasons.append("Densité de mots-clés et longueur adaptées")
     return {
         "score": int(round(20 + pre * 70)),
-        "title": _first_sentence(text)[:90],
-        "summary": _first_sentence(text),
+        "title": _short_label(text, 10),
+        "summary": _short_label(text, 26),
         "reasons": reasons[:3],
     }
 
@@ -205,6 +235,12 @@ def find_highlights(
                 use_llm = False
         for position, (start, end, text, pre) in enumerate(chunk):
             rated = ratings[position] if position < len(ratings) else None
+            if rated is None and use_llm:
+                # Le lot a sauté cet extrait : deuxième essai, un par un (fiable).
+                try:
+                    rated = _rate_one_with_llm(text, model)
+                except Exception:  # noqa: BLE001 - Ollama tombé -> heuristique
+                    use_llm = False
             if rated is None:
                 rated = _rate_heuristic(text, pre)
             highlights.append(
