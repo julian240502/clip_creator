@@ -55,8 +55,10 @@ ollama pull qwen2.5:7b   # ou llama3 / mistral déjà présents
 ```
 
 Choisir « Sélection intelligente » dans les réglages, régler le nombre de clips visés
-et la durée cible, puis **Analyser les moments** : la vidéo est transcrite, découpée en
-fenêtres candidates aux frontières de phrases, pré-filtrée par heuristiques, puis chaque
+et la durée cible, puis **Analyser les moments** : la vidéo est transcrite, recomposée en
+phrases (ponctuation, pauses, capitales de Whisper) puis découpée en fenêtres candidates
+calées sur ces frontières — un clip ne démarre jamais en plein milieu d'une phrase ni sur
+un connecteur suspendu (« Et donc… »). Les fenêtres sont pré-filtrées par heuristiques, puis chaque
 finaliste reçoit un **score de viralité /100**, un **titre**, un **résumé** et une
 **justification** via Ollama (repli sur une notation heuristique si Ollama n'est pas lancé).
 

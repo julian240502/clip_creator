@@ -1,8 +1,10 @@
 """Sélection intelligente : repère les extraits au plus fort potentiel viral.
 
-Pipeline : fenêtres candidates aux frontières de phrases → pré-score heuristique
-(sans dépendance) → notation + résumé + justification par Ollama (repli
-heuristique si absent) → déduplication → tri par score.
+Pipeline : reconstruction d'unités ~phrases à partir du flux de mots →
+fenêtres candidates calées sur ces frontières (jamais un début en plein
+milieu d'une phrase) → pré-score heuristique (sans dépendance) → notation +
+résumé + justification par Ollama (repli heuristique si absent) →
+déduplication → tri par score.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from src.transcribe import Transcript, TranscriptSegment
+from src.transcribe import Transcript, Word
 
 ProgressCallback = Callable[[float, str], None]
 
@@ -21,10 +23,75 @@ _HOOK_RE = re.compile(
     re.IGNORECASE,
 )
 _DANGLING_RE = re.compile(
-    r"^\s*(et|mais|donc|alors|parce que|car|puis|ensuite|and|but|so|because|then)\b",
+    r"^\s*(et|mais|donc|alors|parce que|car|puis|ensuite|enfin|du coup|"
+    r"and|but|so|because|then|also|plus)\b",
     re.IGNORECASE,
 )
 _NUMBER_RE = re.compile(r"\d")
+
+# Reconstruction des phrases -------------------------------------------------
+_SENT_END_RE = re.compile(r"[.!?…]+[\"'»)\]]?$")
+_ABBREV_RE = re.compile(
+    r"\b(m|mme|mr|dr|prof|etc|vs|cf|p|ex|no|n°|art|min|sec|km|kg|ch)\.?$",
+    re.IGNORECASE,
+)
+_GAP_SPLIT = 0.40  # silence (s) entre deux mots qui marque une frontière de phrase
+_LEAD_IN = 0.10    # petit pré-roll pour ne pas rogner la première syllabe
+
+
+@dataclass(frozen=True)
+class _Unit:
+    start: float
+    end: float
+    text: str
+
+
+def _join_words(words: list[Word]) -> str:
+    text = " ".join(word.text.strip() for word in words if word.text.strip())
+    text = re.sub(r"\s+([,.!?…;:»])", r"\1", text)
+    text = re.sub(r"(«)\s+", r"\1", text)
+    text = re.sub(r"(\w)\s+'\s*(\w)", r"\1'\2", text)  # l 'équipe -> l'équipe
+    text = re.sub(r"\s+-(\w)", r"-\1", text)           # est -ce -> est-ce
+    return text.strip()
+
+
+def _flush(buffer: list[Word], units: list[_Unit]) -> None:
+    text = _join_words(buffer)
+    if text:
+        text = text[:1].upper() + text[1:]  # Whisper capitalise mal après ses points
+        units.append(_Unit(buffer[0].start, buffer[-1].end, text))
+    buffer.clear()
+
+
+def _sentence_units(transcript: Transcript) -> list[_Unit]:
+    """Reconstruit des unités ~phrases, chacune démarrant sur une vraie frontière.
+
+    Frontière = ponctuation finale portée par un mot, OU silence marqué avant
+    le mot suivant, OU début d'un segment Whisper que le modèle a capitalisé
+    (c.-à-d. qu'il considère comme une nouvelle phrase). Reste fiable même
+    quand Whisper ponctue peu et coupe ses segments en plein milieu d'une phrase.
+    """
+    segments = [seg for seg in transcript.segments if seg.text.strip()]
+    if not segments:
+        return []
+    units: list[_Unit] = []
+    buffer: list[Word] = []
+    prev_end: float | None = None
+    for seg in segments:
+        seg_words = seg.words or [Word(seg.start, seg.end, seg.text.strip())]
+        for position, word in enumerate(seg_words):
+            token = word.text.strip()
+            if buffer:
+                gap = word.start - prev_end if prev_end is not None else 0.0
+                fresh_segment = position == 0 and token[:1].isupper()
+                if gap >= _GAP_SPLIT or fresh_segment:
+                    _flush(buffer, units)
+            buffer.append(word)
+            prev_end = word.end
+            if _SENT_END_RE.search(token) and not _ABBREV_RE.search(token):
+                _flush(buffer, units)
+    _flush(buffer, units)
+    return units
 
 
 @dataclass(frozen=True)
@@ -42,28 +109,36 @@ class Highlight:
         return self.end - self.start
 
 
-def _sentences(transcript: Transcript) -> list[TranscriptSegment]:
-    return [segment for segment in transcript.segments if segment.text.strip()]
-
-
 def _candidate_windows(
-    sentences: list[TranscriptSegment], *, min_dur: float, max_dur: float, stride: int = 2,
+    units: list, *, min_dur: float, max_dur: float, stride: int = 1,
 ) -> list[tuple[float, float, str]]:
+    """Fenêtres calées sur des frontières de phrases (début ET fin).
+
+    Un début qui tombe sur un connecteur suspendu (« Et donc… », « Du coup… »)
+    est écarté : on glisse à l'unité suivante.
+    """
     windows: list[tuple[float, float, str]] = []
-    count = len(sentences)
+    seen: set[tuple[float, float]] = set()
+    count = len(units)
     for i in range(0, count, stride):
+        if _DANGLING_RE.match(units[i].text):
+            continue
         j = i
-        while j < count and sentences[j].end - sentences[i].start < min_dur:
+        while j < count and units[j].end - units[i].start < min_dur:
             j += 1
-        while j < count and sentences[j].end - sentences[i].start <= max_dur:
+        if j >= count:  # plus assez de matière pour atteindre min_dur
+            break
+        while j + 1 < count and units[j + 1].end - units[i].start <= max_dur:
             j += 1
-        if j <= i:
+        start, end = units[i].start, units[j].end
+        span = end - start
+        if span < min_dur * 0.8 or span > max_dur + 0.5:
             continue
-        start = sentences[i].start
-        end = min(sentences[j - 1].end, start + max_dur)
-        if end - start < min_dur * 0.8:
+        key = (round(start, 1), round(end, 1))
+        if key in seen:
             continue
-        text = " ".join(segment.text.strip() for segment in sentences[i:j])
+        seen.add(key)
+        text = " ".join(units[k].text for k in range(i, j + 1)).strip()
         windows.append((round(start, 2), round(end, 2), text))
     return windows
 
@@ -211,12 +286,12 @@ def find_highlights(
 ) -> list[Highlight]:
     """Renvoie les meilleurs extraits, classés par score décroissant."""
     report = progress or (lambda _value, _message: None)
-    sentences = _sentences(transcript)
-    if not sentences:
+    units = _sentence_units(transcript)
+    if not units:
         return []
 
-    report(0.1, "Repérage des segments…")
-    raw = _candidate_windows(sentences, min_dur=min_duration, max_dur=max_duration)
+    report(0.1, "Repérage des phrases…")
+    raw = _candidate_windows(units, min_dur=min_duration, max_dur=max_duration)
     scored = [(s, e, t, _pre_score(t, e - s)) for (s, e, t) in raw]
     scored = [item for item in scored if item[3] > 0.0]
     finalists = _dedupe(scored)[: max(target_count + 4, 10)]
@@ -245,7 +320,8 @@ def find_highlights(
                 rated = _rate_heuristic(text, pre)
             highlights.append(
                 Highlight(
-                    start=start, end=end, score=rated["score"], title=rated["title"],
+                    start=round(max(0.0, start - _LEAD_IN), 2), end=end,
+                    score=rated["score"], title=rated["title"],
                     summary=rated["summary"], reasons=rated["reasons"], transcript=text,
                 )
             )

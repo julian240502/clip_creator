@@ -9,7 +9,7 @@ from src.highlights import (
     _looks_raw,
     _normalise_rating,
     _pre_score,
-    _sentences,
+    _sentence_units,
     _short_label,
     find_highlights,
 )
@@ -39,10 +39,82 @@ def _transcript() -> Transcript:
 
 
 def test_candidate_windows_respect_duration_bounds() -> None:
-    windows = _candidate_windows(_sentences(_transcript()), min_dur=20.0, max_dur=45.0)
+    windows = _candidate_windows(_sentence_units(_transcript()), min_dur=20.0, max_dur=45.0)
     assert windows
     for start, end, _text in windows:
-        assert 15.0 <= end - start <= 45.0
+        assert 15.0 <= end - start <= 45.5
+
+
+def test_sentence_units_split_on_punctuation_and_pause() -> None:
+    units = _sentence_units(_transcript())
+    # Une unité par phrase ponctuée de la transcription de test.
+    assert len(units) == 7
+    assert units[0].text.startswith("Pourquoi")
+    assert units[0].text.rstrip().endswith("?")
+    assert units[3].text.startswith("Et donc")
+
+
+def test_sentence_units_break_at_a_capitalised_segment_start() -> None:
+    # Deux phrases sans ponctuation finale ; Whisper capitalise le début de la
+    # seconde -> on coupe là plutôt que de tout agglomérer.
+    segs = [
+        _seg(0.0, 4.0, "on parle d'abord du contexte general sans transition nette"),
+        _seg(4.0, 9.0, "Ensuite vient la partie vraiment interessante du sujet"),
+    ]
+    tr = Transcript(language="fr", duration=9.0, model="t", segments=segs)
+    units = _sentence_units(tr)
+    assert len(units) == 2
+    assert units[1].text.startswith("Ensuite")
+
+
+def test_sentence_units_from_word_gaps_without_punctuation() -> None:
+    # Aucun signe de ponctuation : seuls les silences entre mots séparent.
+    words = [
+        Word(0.0, 0.4, "voici"), Word(0.4, 0.8, "le"), Word(0.8, 1.2, "plan"),
+        Word(2.0, 2.4, "on"), Word(2.4, 2.8, "commence"), Word(2.8, 3.2, "maintenant"),
+    ]
+    tr = Transcript(
+        language="fr", duration=3.2, model="t",
+        segments=[TranscriptSegment(0.0, 3.2, "voici le plan on commence maintenant", words)],
+    )
+    units = _sentence_units(tr)
+    assert [u.text for u in units] == ["Voici le plan", "On commence maintenant"]
+
+
+def test_candidate_windows_never_start_on_a_dangling_connector() -> None:
+    windows = _candidate_windows(_sentence_units(_transcript()), min_dur=18.0, max_dur=45.0)
+    assert windows
+    assert not any(text.lstrip().lower().startswith(("et donc", "du coup", "mais "))
+                   for _s, _e, text in windows)
+
+
+def test_no_window_starts_in_the_middle_of_a_sentence() -> None:
+    # Whisper coupe souvent un segment en pleine phrase (suite en minuscule, sans
+    # ponctuation ni pause) : aucune fenêtre candidate ne doit démarrer là.
+    segs = [
+        _seg(0.0, 6.0, "Le point vraiment important que je veux partager avec vous aujourd'hui"),
+        _seg(6.0, 12.0, "et que presque personne ne comprend correctement au début de sa carrière"),
+        _seg(12.0, 18.0, "c'est qu'il faut accepter de se tromper très souvent avant de progresser."),
+        _seg(18.0, 26.0, "Voici la deuxième idée qui change tout quand on la met en pratique enfin."),
+        _seg(26.0, 34.0, "Elle demande un peu de discipline mais les résultats arrivent vite ensuite."),
+    ]
+    tr = Transcript(language="fr", duration=34.0, model="t", segments=segs)
+    units = _sentence_units(tr)
+    unit_starts = {round(u.start, 2) for u in units}
+    assert 6.0 not in unit_starts and 12.0 not in unit_starts  # continuations absorbées
+    windows = _candidate_windows(units, min_dur=12.0, max_dur=30.0)
+    assert windows
+    for start, _end, text in windows:
+        assert round(start, 2) in unit_starts
+        assert text[:1].isupper() and not text.lower().startswith(("et ", "mais "))
+
+
+def test_candidate_windows_end_on_a_sentence_boundary() -> None:
+    units = _sentence_units(_transcript())
+    unit_ends = {round(u.end, 2) for u in units}
+    windows = _candidate_windows(units, min_dur=18.0, max_dur=45.0)
+    assert windows
+    assert all(round(end, 2) in unit_ends for _s, end, _t in windows)
 
 
 def test_pre_score_rewards_a_question_hook() -> None:
