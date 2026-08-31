@@ -239,7 +239,7 @@ def render_captions_controls(source: dict, window, aspect: str, background: str)
         key="captions_on",
     )
     if not ready:
-        st.caption("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
+        st.caption("Nécessite `pip install -r requirements-transcribe.txt`.")
         return None
     if not reframed:
         st.caption("Les sous-titres ne s'ajoutent qu'à un export recadré (pas au format d'origine).")
@@ -493,7 +493,7 @@ if not smart:
     else:
         st.caption("Durée inconnue : toute la vidéo sera traitée.")
 elif not transcription_available():
-    st.warning("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
+    st.warning("Nécessite `pip install -r requirements-transcribe.txt`.")
 else:
     rater = pick_model() if ollama_available() else None
     if not st.session_state.get("smart_warming"):
@@ -508,8 +508,8 @@ else:
     st.caption(
         f"Extraits de ~{int(dur_min)} à {dur_max} s. "
         + (
-            f"Notation par **{rater}** (Ollama)." if rater
-            else "Ollama non détecté — notation heuristique (lance `ollama serve` pour mieux)."
+            "Notés par l'IA locale." if rater
+            else "IA locale indisponible — notation basique."
         )
     )
     if st.button("Analyser les moments", use_container_width=True):
@@ -550,7 +550,7 @@ if smart:
         model_used = st.session_state.get("highlights_model")
         st.subheader(f"{len(highlights)} moments détectés")
         st.caption(
-            f"Notés par {model_used}." if model_used else "Notation heuristique (Ollama absent)."
+            "Notés par l'IA locale." if model_used else "Notation basique (IA locale indisponible)."
         )
         picks: list[tuple[float, float]] = []
         pick_hints: list[tuple[str, str]] = []
@@ -599,11 +599,11 @@ meta_on = st.toggle(
     "Générer titres & hashtags", value=False, disabled=not meta_ready, key="meta_on",
 )
 if not meta_ready:
-    st.caption("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
+    st.caption("Nécessite `pip install -r requirements-transcribe.txt`.")
 elif meta_on:
     st.caption(
         "Un fichier .txt (titre, description, hashtags) par clip — "
-        + ("généré par Ollama." if ollama_available() else "génération heuristique (Ollama absent).")
+        + ("rédigé par l'IA locale." if ollama_available() else "génération basique (IA locale indisponible).")
     )
 meta_model = pick_model() if (meta_on and ollama_available()) else None
 
