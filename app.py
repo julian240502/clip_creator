@@ -178,6 +178,73 @@ def _transcript_has_words(project_dir: str) -> bool:
         return False
 
 
+def render_captions_controls(source: dict, window, vertical: bool, background: str):
+    """Toggle + panneau de style des sous-titres. Renvoie le CaptionStyle ou None."""
+    ready = transcription_available()
+    enabled = st.toggle(
+        "Sous-titres incrustés", value=False, disabled=not (ready and vertical),
+        key="captions_on",
+    )
+    if not ready:
+        st.caption("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
+        return None
+    if not vertical:
+        st.caption("Les sous-titres ne sont disponibles que sur l'export 9:16.")
+        return None
+    if not enabled:
+        return None
+
+    if not st.session_state.get("model_warming"):
+        st.session_state["model_warming"] = True
+        threading.Thread(target=prewarm_model, daemon=True).start()
+    with st.container(border=True):
+        base = TEMPLATES[st.selectbox("Style", list(TEMPLATES))]
+        col_a, col_b, col_c = st.columns(3)
+        font = col_a.selectbox(
+            "Police", CAPTION_FONTS,
+            index=CAPTION_FONTS.index(base.font) if base.font in CAPTION_FONTS else 0,
+        )
+        font_size = col_b.slider("Taille", 32, 130, base.font_size, 2)
+        position_label = col_c.selectbox(
+            "Position", list(CAPTION_POSITIONS),
+            index=list(CAPTION_POSITIONS.values()).index(base.position),
+        )
+        col_d, col_e = st.columns(2)
+        primary_color = col_d.color_picker("Couleur du texte", base.primary_color)
+        highlight_color = col_e.color_picker("Couleur du mot actif", base.highlight_color)
+        mode_label = st.selectbox(
+            "Apparition", list(CAPTION_MODES),
+            index=list(CAPTION_MODES.values()).index(base.mode),
+        )
+        uppercase = st.toggle("MAJUSCULES", value=base.uppercase)
+        style = replace(
+            base, font=font, font_size=font_size,
+            position=CAPTION_POSITIONS[position_label],
+            primary_color=primary_color, highlight_color=highlight_color,
+            mode=CAPTION_MODES[mode_label], uppercase=uppercase,
+        )
+        style_sig = json.dumps(asdict(style), sort_keys=True)
+        st.caption(
+            "Le modèle se charge en arrière-plan. Le 1er aperçu prend quelques secondes de plus, "
+            "les suivants sont quasi instantanés."
+        )
+        if st.button("Aperçu du style", use_container_width=True):
+            with st.spinner("Rendu de l'aperçu…"):
+                try:
+                    preview = render_style_preview(source, window[0] or 0.0, style, background)
+                    st.session_state["style_preview"] = str(preview)
+                    st.session_state["style_preview_sig"] = style_sig
+                except Exception as exc:  # noqa: BLE001 - message affiché tel quel
+                    st.session_state.pop("style_preview", None)
+                    st.error(f"Aperçu impossible : {exc}")
+        preview_path = st.session_state.get("style_preview")
+        if preview_path and Path(preview_path).is_file():
+            if st.session_state.get("style_preview_sig") != style_sig:
+                st.caption("↻ Réglages modifiés depuis cet aperçu — recliquez pour rafraîchir.")
+            st.columns([1, 2, 1])[1].video(preview_path)
+    return style
+
+
 def render_style_preview(source: dict, at: float, style, background: str) -> Path:
     total = source.get("duration")
     if total:
@@ -368,72 +435,15 @@ else:
                 st.session_state.pop("highlights", None)
                 st.error(f"Analyse impossible : {exc}")
 
-captions_ready = transcription_available()
-captions_on = st.toggle(
-    "Sous-titres incrustés", value=False, disabled=not (captions_ready and vertical),
-)
-captions_style = None
-if not captions_ready:
-    st.caption("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
-elif not vertical:
-    st.caption("Les sous-titres ne sont disponibles que sur l'export 9:16.")
-elif captions_on:
-    # Charge le modèle en tâche de fond pendant que l'utilisateur règle le style.
-    if not st.session_state.get("model_warming"):
-        st.session_state["model_warming"] = True
-        threading.Thread(target=prewarm_model, daemon=True).start()
-    with st.container(border=True):
-        template_name = st.selectbox("Style", list(TEMPLATES))
-        base = TEMPLATES[template_name]
-        col_a, col_b, col_c = st.columns(3)
-        font = col_a.selectbox(
-            "Police", CAPTION_FONTS,
-            index=CAPTION_FONTS.index(base.font) if base.font in CAPTION_FONTS else 0,
-        )
-        font_size = col_b.slider("Taille", 32, 130, base.font_size, 2)
-        position_label = col_c.selectbox(
-            "Position", list(CAPTION_POSITIONS),
-            index=list(CAPTION_POSITIONS.values()).index(base.position),
-        )
-        col_d, col_e = st.columns(2)
-        primary_color = col_d.color_picker("Couleur du texte", base.primary_color)
-        highlight_color = col_e.color_picker("Couleur du mot actif", base.highlight_color)
-        mode_label = st.selectbox(
-            "Apparition", list(CAPTION_MODES),
-            index=list(CAPTION_MODES.values()).index(base.mode),
-        )
-        uppercase = st.toggle("MAJUSCULES", value=base.uppercase)
-        captions_style = replace(
-            base, font=font, font_size=font_size,
-            position=CAPTION_POSITIONS[position_label],
-            primary_color=primary_color, highlight_color=highlight_color,
-            mode=CAPTION_MODES[mode_label], uppercase=uppercase,
-        )
-        style_sig = json.dumps(asdict(captions_style), sort_keys=True)
-        st.caption(
-            "Le modèle se charge en arrière-plan. Le 1er aperçu prend quelques secondes de plus, "
-            "les suivants sont quasi instantanés."
-        )
-        if st.button("Aperçu du style", use_container_width=True):
-            with st.spinner("Rendu de l'aperçu…"):
-                try:
-                    preview = render_style_preview(
-                        source, window[0] or 0.0, captions_style, background,
-                    )
-                    st.session_state["style_preview"] = str(preview)
-                    st.session_state["style_preview_sig"] = style_sig
-                except Exception as exc:  # noqa: BLE001 - message affiché tel quel
-                    st.session_state.pop("style_preview", None)
-                    st.error(f"Aperçu impossible : {exc}")
-        preview_path = st.session_state.get("style_preview")
-        if preview_path and Path(preview_path).is_file():
-            if st.session_state.get("style_preview_sig") != style_sig:
-                st.caption("↻ Réglages modifiés depuis cet aperçu — recliquez pour rafraîchir.")
-            st.columns([1, 2, 1])[1].video(preview_path)
-
 # Accélération matérielle détectée automatiquement (NVENC / Quick Sync / AMF / CPU).
 encoder = "auto"
 encoding_speed = "fast"
+
+# En mode régulier, les sous-titres se règlent ici ; en mode intelligent, ils
+# apparaissent après la liste des moments (juste avant « Générer »).
+captions_style = None
+if not smart:
+    captions_style = render_captions_controls(source, window, vertical, background)
 
 # --- Phase 2.5 : choisir les moments (mode intelligent) -----------------------
 clips_windows: list[tuple[float, float]] | None = None
@@ -473,7 +483,12 @@ if smart:
             if keep:
                 picks.append((float(item["start"]), float(item["end"])))
         clips_windows = picks
-        gen_label = f"Générer {len(picks)} clip(s) sélectionné(s)  ✦"
+
+        st.markdown("#### Finalisation")
+        captions_style = render_captions_controls(source, window, vertical, background)
+        subtitle_state = "activés" if captions_style else "désactivés"
+        st.caption(f"Sous-titres : **{subtitle_state}** · {len(picks)} clip(s) coché(s).")
+        gen_label = f"Générer {len(picks)} clip(s)  ✦"
         gen_disabled = not picks
 
 if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
