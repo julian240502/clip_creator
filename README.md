@@ -61,6 +61,9 @@ calées sur ces frontières — un clip ne démarre jamais en plein milieu d'une
 un connecteur suspendu (« Et donc… »). Les fenêtres sont pré-filtrées par heuristiques, puis chaque
 finaliste reçoit un **score de viralité /100**, un **titre**, un **résumé** et une
 **justification** via Ollama (repli sur une notation heuristique si Ollama n'est pas lancé).
+Chaque extrait est aussi jaugé sur son **accroche** (les toutes premières secondes) : ceux
+qui ouvrent fort portent un badge **⚡ Accroche forte** et affichent la phrase d'accroche.
+Le hook ne filtre rien et ne change pas le classement — il ne fait que mettre en avant.
 
 L'écran « moments détectés » liste les extraits classés par score ; on coche ceux à
 produire et seuls ceux-là sont rendus (sous-titres compris). Le modèle Ollama est choisi

@@ -21,7 +21,7 @@ from src.captions import (
     write_clip_captions,
 )
 from src.downloader import download_clip, download_source, probe_url
-from src.highlights import find_highlights
+from src.highlights import HOOK_STRONG, find_highlights
 from src.llm import ollama_available, pick_model
 from src.llm import prewarm as prewarm_llm
 from src.paths import SOURCE_CACHE_DIR
@@ -596,9 +596,11 @@ if smart:
         st.caption("Lance **Analyser les moments** pour voir les extraits proposés.")
     else:
         model_used = st.session_state.get("highlights_model")
+        n_hooked = sum(1 for h in highlights if int(h.get("hook_score", 0)) >= HOOK_STRONG)
         st.subheader(f"{len(highlights)} moments détectés")
         st.caption(
             ("Notés par l'IA locale." if model_used else "Notation basique (IA locale indisponible).")
+            + (f" · {n_hooked} avec une accroche forte ⚡" if n_hooked else "")
             + (f" · modèle `{model_used}`" if ADVANCED and model_used else "")
         )
         picks: list[tuple[float, float]] = []
@@ -614,7 +616,20 @@ if smart:
                 )
                 if item.get("thumb") and Path(item["thumb"]).is_file():
                     row[1].image(item["thumb"], use_container_width=True)
-                row[2].markdown(f"**{item['title']}**")
+                hook_score = int(item.get("hook_score", 0))
+                strong_hook = hook_score >= HOOK_STRONG
+                title_html = f"**{item['title']}**"
+                if strong_hook:
+                    title_html += (
+                        " <span style='background:#123a2a;color:#3ddc84;border:1px solid #1f6b4a;"
+                        "border-radius:999px;padding:.05rem .45rem;font-size:.68rem;"
+                        "font-weight:700;white-space:nowrap'>⚡ Accroche forte</span>"
+                    )
+                if ADVANCED:
+                    title_html += (
+                        f" <span style='color:#9a9db0;font-size:.68rem'>hook {hook_score}/100</span>"
+                    )
+                row[2].markdown(title_html, unsafe_allow_html=True)
                 row[2].caption(
                     f"{timecode(item['start'])} – {timecode(item['end'])} · "
                     f"{int(item['end'] - item['start'])} s"
@@ -627,6 +642,8 @@ if smart:
                     unsafe_allow_html=True,
                 )
                 st.write(item["summary"])
+                if item.get("hook_line"):
+                    st.caption(f"Accroche · « {item['hook_line']} »")
                 reasons = item.get("reasons") or []
                 if reasons:
                     st.caption(" · ".join(reasons))

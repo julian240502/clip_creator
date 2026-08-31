@@ -4,10 +4,13 @@ import pytest
 
 from src import llm
 from src.highlights import (
+    HOOK_STRONG,
     _candidate_windows,
     _dedupe,
+    _hook_score,
     _looks_raw,
     _normalise_rating,
+    _opening,
     _pre_score,
     _sentence_units,
     _short_label,
@@ -115,6 +118,52 @@ def test_candidate_windows_end_on_a_sentence_boundary() -> None:
     windows = _candidate_windows(units, min_dur=18.0, max_dur=45.0)
     assert windows
     assert all(round(end, 2) in unit_ends for _s, end, _t in windows)
+
+
+def test_opening_takes_the_first_sentence() -> None:
+    assert _opening("Tu fais ça mal. Voici pourquoi et comment corriger.") == "Tu fais ça mal."
+    # Sans ponctuation : repli sur les premiers mots.
+    long = " ".join(["mot"] * 40)
+    assert len(_opening(long).split()) <= 22
+
+
+def test_hook_score_rewards_a_question_opening() -> None:
+    strong = _hook_score("Pourquoi est-ce que 90 % des gens abandonnent si vite ?")
+    weak = _hook_score("Donc voilà en gros on va reparler un peu de tout ça tranquillement.")
+    assert strong >= HOOK_STRONG
+    assert weak < HOOK_STRONG
+    assert strong > weak
+
+
+def test_hook_score_penalises_dangling_and_filler_openings() -> None:
+    assert _hook_score("Et du coup on continue sur le sujet précédent.") < HOOK_STRONG
+    assert _hook_score("Euh bah je sais pas trop en fait.") < HOOK_STRONG
+
+
+def test_find_highlights_attaches_hook_without_reordering() -> None:
+    result = find_highlights(_transcript(), target_count=5, min_duration=18.0, max_duration=45.0)
+    assert result
+    # Le classement reste piloté par le score viral, pas par le hook.
+    assert [h.score for h in result] == sorted((h.score for h in result), reverse=True)
+    for h in result:
+        assert 0 <= h.hook_score <= 100
+        assert (h.hook_line != "") == (h.hook_score >= HOOK_STRONG)
+
+
+def test_normalise_rating_reads_llm_hook_fields() -> None:
+    out = _normalise_rating(
+        {"score": 70, "hook": 88, "hook_line": "\"Personne ne te dit ça\"",
+         "title": "Le conseil caché", "summary": "Un point clé."},
+        "fallback",
+    )
+    assert out["hook_score"] == 88
+    assert out["hook_line"] == "Personne ne te dit ça"
+
+
+def test_normalise_rating_hook_absent_is_flagged_minus_one() -> None:
+    out = _normalise_rating({"score": 60, "title": "T", "summary": "S"}, "fallback")
+    assert out["hook_score"] == -1
+    assert out["hook_line"] == ""
 
 
 def test_pre_score_rewards_a_question_hook() -> None:

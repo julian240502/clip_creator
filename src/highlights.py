@@ -5,6 +5,10 @@ fenêtres candidates calées sur ces frontières (jamais un début en plein
 milieu d'une phrase) → pré-score heuristique (sans dépendance) → notation +
 résumé + justification par Ollama (repli heuristique si absent) →
 déduplication → tri par score.
+
+Chaque extrait porte aussi un `hook_score` (0-100) et une `hook_line` : ils
+servent UNIQUEMENT à mettre en avant les clips qui ouvrent fort. Ils ne
+filtrent rien et ne changent pas le classement (par score viral).
 """
 
 from __future__ import annotations
@@ -37,6 +41,28 @@ _ABBREV_RE = re.compile(
 )
 _GAP_SPLIT = 0.40  # silence (s) entre deux mots qui marque une frontière de phrase
 _LEAD_IN = 0.10    # petit pré-roll pour ne pas rogner la première syllabe
+
+# Accroche (« hook ») ------------------------------------------------------------
+HOOK_STRONG = 65   # seuil d'affichage du badge « accroche forte »
+_HOOK_OPENING_WORDS = 22
+_HOOK_QUESTION_RE = re.compile(
+    r"\b(comment|pourquoi|combien|qui\b|quoi|est-ce|et si|savais?-tu|saviez-vous|"
+    r"how|why|what\b)\b",
+    re.IGNORECASE,
+)
+_HOOK_ADDRESS_RE = re.compile(r"\b(tu|t'|toi|ton|ta|tes|vous|votre|vos|you|your)\b", re.IGNORECASE)
+_HOOK_CURIOSITY_RE = re.compile(
+    r"(personne ne|la vérité|le secret|le vrai|voici pourquoi|la raison|le problème c'est|"
+    r"le truc c'est|ce que .{0,30} c'est|j'ai (compris|découvert|réalisé|appris)|"
+    r"la plupart des gens|tout le monde (croit|pense)|imagine|écoute|attends|le pire|le meilleur)",
+    re.IGNORECASE,
+)
+_HOOK_BOLD_RE = re.compile(
+    r"\b(jamais|toujours|incroyable|fou|folle|dingue|énorme|choquant|hallucinant|"
+    r"personne|rien|aucun|le plus|la plus)\b",
+    re.IGNORECASE,
+)
+_HOOK_FILLER_RE = re.compile(r"^\s*(euh|bah|ben|hmm|alors euh|donc euh|en fait euh)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -98,15 +124,57 @@ def _sentence_units(transcript: Transcript) -> list[_Unit]:
 class Highlight:
     start: float
     end: float
-    score: int              # 0-100
+    score: int              # 0-100 (potentiel viral, sert au classement)
     title: str
     summary: str
     reasons: list[str] = field(default_factory=list)
     transcript: str = ""
+    hook_score: int = 0     # 0-100, qualité des toutes premières secondes
+    hook_line: str = ""     # phrase d'accroche mise en avant ("" si ouverture molle)
 
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    @property
+    def has_hook(self) -> bool:
+        return self.hook_score >= HOOK_STRONG
+
+
+def _opening(text: str, max_words: int = _HOOK_OPENING_WORDS) -> str:
+    """Première phrase de l'extrait (à défaut, ses premiers mots)."""
+    stripped = text.strip()
+    match = re.match(r"(.{0,240}?[.!?…])(?:\s|$)", stripped)
+    head = match.group(1) if match else " ".join(stripped.split()[:max_words])
+    return head.strip()
+
+
+def _hook_score(opening: str) -> int:
+    """Note 0-100 de l'accroche à partir de sa seule première phrase."""
+    text = opening.strip()
+    if not text:
+        return 0
+    words = text.split()
+    score = 25.0
+    if "?" in text or _HOOK_QUESTION_RE.search(text):
+        score += 24
+    if _HOOK_CURIOSITY_RE.search(text):
+        score += 20
+    if _HOOK_ADDRESS_RE.search(text):
+        score += 12
+    if _NUMBER_RE.search(text):
+        score += 10
+    if _HOOK_BOLD_RE.search(text):
+        score += 10
+    if len(words) <= 12:
+        score += 8
+    elif len(words) >= 30:
+        score -= 12
+    if _DANGLING_RE.match(text):
+        score -= 20
+    if _HOOK_FILLER_RE.match(text):
+        score -= 20
+    return int(max(0, min(100, round(score))))
 
 
 def _candidate_windows(
@@ -183,18 +251,27 @@ def _dedupe(
 
 
 _BATCH_SIZE = 4
+_HOOK_INSTRUCTION = (
+    "Un clip vit ou meurt sur sa PREMIÈRE phrase : \"hook\" = à quel point cette "
+    "première phrase donne envie de rester (question, promesse, chiffre, "
+    "affirmation forte, curiosité). \"hook_line\" = cette phrase d'accroche "
+    'recopiée telle quelle, ou "" si l\'ouverture est molle.'
+)
 _SYSTEM_BATCH = (
     "Tu es un expert du montage de clips courts viraux (TikTok, Reels, Shorts). "
     "On te donne une liste numérotée d'extraits (transcriptions). Pour CHAQUE extrait, évalue "
-    "le potentiel viral. Réponds UNIQUEMENT en JSON : "
+    "le potentiel viral. " + _HOOK_INSTRUCTION + " Réponds UNIQUEMENT en JSON : "
     '{"clips": [{"i": <numéro de l\'extrait>, "score": <entier 0-100>, '
+    '"hook": <entier 0-100>, "hook_line": "<phrase ou \\"\\">", '
     '"title": "<accroche FR, max 12 mots>", "summary": "<une phrase: de quoi ça parle>", '
     '"reasons": ["<justif courte FR>", ...]}, ...]} — un objet par extrait, dans l\'ordre.'
 )
 _SYSTEM_ONE = (
     "Tu es un expert des clips courts viraux. À partir de la transcription d'un extrait, "
-    'réponds UNIQUEMENT en JSON : {"score": <entier 0-100>, "title": "<accroche FR, max 12 mots, '
-    'pas la transcription brute>", "summary": "<une phrase: de quoi parle l\'extrait>", '
+    + _HOOK_INSTRUCTION + ' Réponds UNIQUEMENT en JSON : {"score": <entier 0-100>, '
+    '"hook": <entier 0-100>, "hook_line": "<phrase ou \\"\\">", '
+    '"title": "<accroche FR, max 12 mots, pas la transcription brute>", '
+    '"summary": "<une phrase: de quoi parle l\'extrait>", '
     '"reasons": ["<justification courte FR>", ...]}.'
 )
 
@@ -215,6 +292,13 @@ def _looks_raw(value: str, text: str) -> bool:
     return len(value) > 70 and value.lower()[:40] == text.strip().lower()[:40]
 
 
+def _coerce_score(value: object, default: int) -> int:
+    try:
+        return max(0, min(100, int(float(value))))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def _normalise_rating(raw: dict, fallback_text: str) -> dict:
     reasons = [str(r).strip() for r in raw.get("reasons", []) if str(r).strip()]
     title = str(raw.get("title") or "").strip()
@@ -223,11 +307,16 @@ def _normalise_rating(raw: dict, fallback_text: str) -> dict:
     summary = str(raw.get("summary") or "").strip()
     if _looks_raw(summary, fallback_text) and summary.lower()[:20] == title.lower()[:20]:
         summary = _short_label(fallback_text, 26)
+    raw_hook = raw.get("hook", raw.get("hook_score"))
+    hook_line = str(raw.get("hook_line") or "").strip().strip('"«»')
     return {
-        "score": max(0, min(100, int(float(raw.get("score", 50))))),
+        "score": _coerce_score(raw.get("score", 50), 50),
         "title": title[:110],
         "summary": summary or _short_label(fallback_text, 26),
         "reasons": reasons[:3],
+        # -1 => le modèle n'a pas noté l'accroche, l'appelant retombe sur l'heuristique.
+        "hook_score": _coerce_score(raw_hook, -1) if raw_hook is not None else -1,
+        "hook_line": hook_line[:140],
     }
 
 
@@ -272,6 +361,8 @@ def _rate_heuristic(text: str, pre: float) -> dict:
         "title": _short_label(text, 10),
         "summary": _short_label(text, 26),
         "reasons": reasons[:3],
+        "hook_score": -1,   # calculé par find_highlights à partir de l'ouverture
+        "hook_line": "",
     }
 
 
@@ -318,11 +409,22 @@ def find_highlights(
                     use_llm = False
             if rated is None:
                 rated = _rate_heuristic(text, pre)
+            opening = _opening(text)
+            hook_score = rated.get("hook_score", -1)
+            if hook_score < 0:  # accroche non notée par le modèle -> heuristique
+                hook_score = _hook_score(opening)
+            # On ne met en avant une hook_line que pour les accroches qui valent le coup.
+            if hook_score >= HOOK_STRONG:
+                hook_line = (rated.get("hook_line") or "").strip() or opening
+                hook_line = _short_label(hook_line, 16)  # phrase courte et lisible
+            else:
+                hook_line = ""
             highlights.append(
                 Highlight(
                     start=round(max(0.0, start - _LEAD_IN), 2), end=end,
                     score=rated["score"], title=rated["title"],
                     summary=rated["summary"], reasons=rated["reasons"], transcript=text,
+                    hook_score=hook_score, hook_line=hook_line,
                 )
             )
         report(
@@ -330,6 +432,7 @@ def find_highlights(
             "Notation des extraits…",
         )
 
+    # Classement par score viral uniquement : le hook n'est qu'une mise en avant.
     highlights.sort(key=lambda item: item.score, reverse=True)
     report(1.0, "Analyse terminée.")
     return highlights[:target_count]
