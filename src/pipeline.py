@@ -12,7 +12,7 @@ from src.downloader import download_source
 from src.encoder import encoder_label, resolve_video_encoder
 from src.paths import DATA_DIR, SOURCE_CACHE_DIR
 from src.quality import get_quality_preset
-from src.resizer import segment_vertical
+from src.resizer import resize_clip_for_vertical, segment_vertical
 from src.transcribe import DEFAULT_MODEL
 from src.video_splitter import (
     get_video_duration,
@@ -40,6 +40,7 @@ def process_video(
     vertical_background: str = "blur",
     source_start: float | None = None,
     source_end: float | None = None,
+    clips_windows: list[tuple[float, float]] | None = None,
     transcribe: bool = False,
     transcribe_model: str = DEFAULT_MODEL,
     captions_style: CaptionStyle | None = None,
@@ -100,6 +101,35 @@ def process_video(
         ]
         report(1.0, "Exports terminés")
         return project_dir, landscape
+    if clips_windows:
+        # Mode « sélection intelligente » : on rend exactement les fenêtres choisies.
+        windows = sorted((float(s), float(e)) for s, e in clips_windows if e > s)
+        vertical_dir, exports = project_dir / "vertical", []
+        report(0.25, f"Rendu de {len(windows)} clip(s) via {encoder_label(resolved_encoder)}…")
+        for index, (clip_start, clip_end) in enumerate(windows):
+            report(
+                0.25 + 0.7 * index / max(len(windows), 1),
+                f"Clip {index + 1}/{len(windows)}…",
+            )
+            output = vertical_dir / f"clip_{index + 1:03d}.mp4"
+            clip_captions = None
+            if captions_style is not None and transcript is not None:
+                from src.captions import write_clip_captions
+
+                clip_captions = write_clip_captions(
+                    transcript, output.with_suffix(".ass"),
+                    clip_start=clip_start, clip_end=clip_end,
+                    width=quality.width, height=quality.height, style=captions_style,
+                )
+            clip_path = resize_clip_for_vertical(
+                source, output, encoder=encoder, encoding_speed=encoding_speed,
+                quality=quality.key, background=vertical_background,
+                start=clip_start, duration=clip_end - clip_start, captions_file=clip_captions,
+            )
+            exports.append(clip_path)
+            notify_clip(clip_path)
+        report(1.0, "Exports terminés")
+        return project_dir, exports
     # Découpage + format vertical en UNE passe : la source n'est décodée qu'une
     # fois, l'encodeur et libass ne sont initialisés qu'une fois.
     clip_count = math.ceil((window_end - window_start) / clip_length)

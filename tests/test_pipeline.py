@@ -76,6 +76,26 @@ def test_split_video_respects_source_window_and_reports_each_clip(
     assert get_video_duration(clips[0]) == pytest.approx(1, abs=0.15)
 
 
+def test_process_video_renders_only_the_selected_windows(
+    sample_video: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    from src import pipeline
+
+    monkeypatch.setattr(pipeline, "DATA_DIR", str(tmp_path))
+    seen: list[Path] = []
+    project_dir, clips = pipeline.process_video(
+        uploaded_path=sample_video, vertical=True, encoder="cpu",
+        export_quality="720p", encoding_speed="fast",
+        clips_windows=[(0.0, 1.0), (2.0, 3.0)], on_clip=seen.append,
+    )
+    assert len(clips) == 2
+    assert [Path(c) for c in clips] == seen
+    assert get_video_duration(clips[0]) == pytest.approx(1, abs=0.25)
+    assert sorted(p.name for p in (Path(project_dir) / "vertical").glob("*.mp4")) == [
+        "clip_001.mp4", "clip_002.mp4",
+    ]
+
+
 def test_segment_vertical_cuts_and_reframes_in_one_pass(
     sample_video: Path, tmp_path: Path,
 ) -> None:

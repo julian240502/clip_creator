@@ -20,7 +20,11 @@ from src.captions import (
     TEMPLATES,
     write_clip_captions,
 )
-from src.downloader import download_clip, probe_url
+from src.downloader import download_clip, download_source, probe_url
+from src.highlights import find_highlights
+from src.llm import ollama_available, pick_model
+from src.llm import prewarm as prewarm_llm
+from src.paths import SOURCE_CACHE_DIR
 from src.pipeline import process_video
 from src.quality import get_quality_preset
 from src.resizer import resize_clip_for_vertical
@@ -90,9 +94,27 @@ def reset_source() -> None:
     for key in (
         "source", "clips", "project_dir", "captions_skipped",
         "style_preview", "style_preview_sig", "preview_at",
+        "highlights", "highlights_model",
     ):
         st.session_state.pop(key, None)
     shutil.rmtree(session_dir(), ignore_errors=True)
+
+
+def analyse_highlights(source: dict, quality_key: str, target_count: int,
+                       dur_min: int, dur_max: int) -> tuple[list[dict], str | None]:
+    """Télécharge (si URL), transcrit, puis note les moments. Renvoie (highlights, modèle)."""
+    if source["kind"] == "url":
+        max_h = get_quality_preset(quality_key).source_max_height
+        media = download_source(source["ref"], SOURCE_CACHE_DIR, max_height=max_h)
+    else:
+        media = source["path"]
+    transcript = transcribe(media, cache_dir=session_dir())
+    model = pick_model() if ollama_available() else None
+    found = find_highlights(
+        transcript, target_count=target_count,
+        min_duration=float(dur_min), max_duration=float(dur_max), model=model,
+    )
+    return [asdict(item) for item in found], model
 
 
 def timecode(seconds: float) -> str:
@@ -289,27 +311,62 @@ with meta:
         st.rerun()
 
 st.subheader("Réglages")
-clip_length = st.slider("Durée d'un clip", 10, 180, 30, 5, format="%d sec")
-
-if duration:
-    window = st.slider(
-        "Portion à clipper", 0.0, float(duration), (0.0, float(duration)),
-        step=1.0, format="%d s",
-    )
-    span = window[1] - window[0]
-    estimated = math.ceil(span / clip_length) if span > 0 else 0
-    st.metric("Clips à générer", f"≈ {estimated}")
-    st.caption(f"{clip_length} s l'unité · sur {timecode(span)} de vidéo sélectionnée")
-else:
-    window = (0.0, None)
-    st.caption("Durée inconnue : toute la vidéo sera traitée.")
-
 quality_key = QUALITY_CHOICES[st.selectbox("Qualité", list(QUALITY_CHOICES))]
 vertical = st.toggle("Exporter en 9:16", value=True)
 background = "blur"
 if vertical:
     background = BACKGROUND_CHOICES[st.selectbox("Arrière-plan vertical", list(BACKGROUND_CHOICES))]
     st.caption("La vidéo paysage nette reste entièrement visible au premier plan.")
+
+smart = st.radio(
+    "Découpage", ["Régulier", "Sélection intelligente"], horizontal=True,
+) == "Sélection intelligente"
+
+clip_length = 30
+window = (0.0, None)
+if not smart:
+    st.session_state.pop("highlights", None)
+    clip_length = st.slider("Durée d'un clip", 10, 180, 30, 5, format="%d sec")
+    if duration:
+        window = st.slider(
+            "Portion à clipper", 0.0, float(duration), (0.0, float(duration)),
+            step=1.0, format="%d s",
+        )
+        span = window[1] - window[0]
+        estimated = math.ceil(span / clip_length) if span > 0 else 0
+        st.metric("Clips à générer", f"≈ {estimated}")
+        st.caption(f"{clip_length} s l'unité · sur {timecode(span)} de vidéo sélectionnée")
+    else:
+        st.caption("Durée inconnue : toute la vidéo sera traitée.")
+elif not transcription_available():
+    st.warning("Nécessite `pip install -r requirements-transcribe.txt` (faster-whisper).")
+else:
+    rater = pick_model() if ollama_available() else None
+    if not st.session_state.get("smart_warming"):
+        st.session_state["smart_warming"] = True
+        threading.Thread(target=prewarm_model, daemon=True).start()
+        if rater:
+            threading.Thread(target=prewarm_llm, daemon=True).start()
+    col_n, col_d = st.columns(2)
+    target_count = col_n.slider("Nombre de clips visés", 3, 15, 8)
+    dur_min, dur_max = col_d.slider("Durée cible (s)", 15, 90, (20, 60))
+    st.caption(
+        f"Notation par **{rater}** (Ollama)." if rater
+        else "Ollama non détecté — notation heuristique (lance `ollama serve` pour mieux)."
+    )
+    if st.button("Analyser les moments", use_container_width=True):
+        with st.spinner("Analyse : téléchargement, transcription, notation…"):
+            try:
+                found, used = analyse_highlights(
+                    source, quality_key, target_count, dur_min, dur_max,
+                )
+                st.session_state["highlights"] = found
+                st.session_state["highlights_model"] = used
+                if not found:
+                    st.warning("Aucun moment exploitable détecté (pas de parole ?).")
+            except Exception as exc:  # noqa: BLE001 - message affiché tel quel
+                st.session_state.pop("highlights", None)
+                st.error(f"Analyse impossible : {exc}")
 
 captions_ready = transcription_available()
 captions_on = st.toggle(
@@ -378,7 +435,48 @@ elif captions_on:
 encoder = "auto"
 encoding_speed = "fast"
 
-if st.button("Générer les clips  ✦", use_container_width=True):
+# --- Phase 2.5 : choisir les moments (mode intelligent) -----------------------
+clips_windows: list[tuple[float, float]] | None = None
+gen_label = "Générer les clips  ✦"
+gen_disabled = False
+if smart:
+    highlights = st.session_state.get("highlights")
+    if not highlights:
+        gen_disabled = True
+        st.caption("Lance **Analyser les moments** pour voir les extraits proposés.")
+    else:
+        model_used = st.session_state.get("highlights_model")
+        st.subheader(f"{len(highlights)} moments détectés")
+        st.caption(
+            f"Notés par {model_used}." if model_used else "Notation heuristique (Ollama absent)."
+        )
+        picks: list[tuple[float, float]] = []
+        for index, item in enumerate(highlights):
+            with st.container(border=True):
+                head = st.columns([1, 7, 2])
+                keep = head[0].checkbox(
+                    "sel", value=index < min(3, len(highlights)),
+                    key=f"hl-{index}", label_visibility="collapsed",
+                )
+                head[1].markdown(f"**{item['title']}**")
+                head[1].caption(
+                    f"{timecode(item['start'])} – {timecode(item['end'])} · "
+                    f"{int(item['end'] - item['start'])} s"
+                )
+                head[2].markdown(f"### {item['score']}")
+                st.write(item["summary"])
+                with st.expander("Pourquoi ce score"):
+                    for reason in item["reasons"]:
+                        st.markdown(f"- {reason}")
+                    extract = item["transcript"]
+                    st.caption(extract[:500] + ("…" if len(extract) > 500 else ""))
+            if keep:
+                picks.append((float(item["start"]), float(item["end"])))
+        clips_windows = picks
+        gen_label = f"Générer {len(picks)} clip(s) sélectionné(s)  ✦"
+        gen_disabled = not picks
+
+if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
     progress_bar = st.progress(0.0)
     status = st.empty()
     live = st.container()
@@ -406,6 +504,7 @@ if st.button("Générer les clips  ✦", use_container_width=True):
             vertical_background=background,
             source_start=window[0],
             source_end=window[1],
+            clips_windows=clips_windows,
             captions_style=captions_style,
             on_clip=on_clip,
             progress=on_progress,

@@ -21,7 +21,28 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
 - aperçu et téléchargement individuel ou groupé en ZIP ;
 - un dossier distinct par traitement dans `data/projects/` ;
 - sous-titres animés incrustés (optionnel) : styles, police, taille, couleur, position,
-  et modes d'apparition mot actif / karaoké / mot par mot / ligne par ligne.
+  et modes d'apparition mot actif / karaoké / mot par mot / ligne par ligne ;
+- deux modes de découpage : **régulier** (durée fixe) et **sélection intelligente**
+  (repère les extraits au plus fort potentiel viral, les note et les classe).
+
+## Sélection intelligente (optionnel)
+
+Nécessite `faster-whisper` (voir plus bas) et, pour la notation, **Ollama** :
+
+```bash
+ollama serve
+ollama pull qwen2.5:7b   # ou llama3 / mistral déjà présents
+```
+
+Choisir « Sélection intelligente » dans les réglages, régler le nombre de clips visés
+et la durée cible, puis **Analyser les moments** : la vidéo est transcrite, découpée en
+fenêtres candidates aux frontières de phrases, pré-filtrée par heuristiques, puis chaque
+finaliste reçoit un **score de viralité /100**, un **titre**, un **résumé** et une
+**justification** via Ollama (repli sur une notation heuristique si Ollama n'est pas lancé).
+
+L'écran « moments détectés » liste les extraits classés par score ; on coche ceux à
+produire et seuls ceux-là sont rendus (sous-titres compris). Le modèle Ollama est choisi
+automatiquement (`qwen2.5` > `llama3.1` > `llama3` > `mistral` > …).
 
 ## Sous-titres incrustés (optionnel)
 
