@@ -68,6 +68,14 @@ label p, [data-testid="stWidgetLabel"] p {color:#e2e3f0 !important}
 
 .stButton>button,.stDownloadButton>button {border-radius:12px;font-weight:700;border:0;background:linear-gradient(90deg,#7774ff,#a855f7);color:#fff}
 .clip-card {background:#171924;border:1px solid #292c3d;border-radius:16px;padding:.9rem;margin:.5rem 0}
+
+/* Barre latérale (mode avancé) accordée au fond sombre */
+[data-testid="stSidebar"] {background:#12131c;border-right:1px solid #262838}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] li {color:#e2e3f0}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {color:#9a9db0}
+[data-testid="stSidebar"] code {color:#c9cbff;background:#20223a}
+[data-testid="stSidebarCollapseButton"] svg, [data-testid="stSidebarCollapseButton"] {color:#e2e3f0;fill:#e2e3f0}
 </style>
 """,
     unsafe_allow_html=True,
