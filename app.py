@@ -326,6 +326,45 @@ def render_style_preview(source: dict, at: float, style, aspect: str, background
     return output
 
 
+def render_diagnostics() -> None:
+    """Panneau latéral du mode avancé : détails techniques masqués par défaut."""
+    from src.encoder import encoder_label, resolve_video_encoder
+
+    st.markdown("**Diagnostic**")
+    llm_model = pick_model() if ollama_available() else None
+    whisper = DEFAULT_MODEL if transcription_available() else None
+    try:
+        video_encoder = encoder_label(resolve_video_encoder("auto"))
+    except Exception:  # noqa: BLE001 - aucun encodeur matériel/logiciel utilisable
+        video_encoder = "indisponible"
+    st.markdown(
+        f"- IA locale : {f'`{llm_model}`' if llm_model else '_absente_'}\n"
+        f"- Transcription : {f'`{whisper}`' if whisper else '_absente_'}\n"
+        f"- Recadrage visage : {'ok' if reframe_available() else '_absent_'}\n"
+        f"- Encodeur vidéo : `{video_encoder}`"
+    )
+    st.caption(f"Session · `{session_dir()}`")
+    st.caption(f"Cache sources · `{SOURCE_CACHE_DIR}`")
+    last_project = st.session_state.get("project_dir")
+    if last_project:
+        st.caption(f"Dernier projet · `{last_project}`")
+
+
+# --- Mode avancé : détails techniques dans la barre latérale -------------------
+if "advanced_mode" not in st.session_state:
+    st.session_state["advanced_mode"] = (
+        st.query_params.get("debug", "").lower() in ("1", "true", "on", "yes")
+    )
+with st.sidebar:
+    ADVANCED = st.toggle(
+        "Mode avancé", key="advanced_mode",
+        help="Affiche les modèles IA utilisés, l'encodeur vidéo, les chemins de "
+             "travail et le transcript brut. À réserver au débogage.",
+    )
+    if ADVANCED:
+        render_diagnostics()
+
+
 # --- Phase 1 : charger une vidéo -------------------------------------------------
 if "source" not in st.session_state:
     st.markdown(
@@ -511,6 +550,7 @@ else:
             "Notés par l'IA locale." if rater
             else "IA locale indisponible — notation basique."
         )
+        + (f" · modèle `{rater}`" if ADVANCED and rater else "")
     )
     if st.button("Analyser les moments", use_container_width=True):
         with st.spinner("Analyse : téléchargement, transcription, notation…"):
@@ -550,7 +590,8 @@ if smart:
         model_used = st.session_state.get("highlights_model")
         st.subheader(f"{len(highlights)} moments détectés")
         st.caption(
-            "Notés par l'IA locale." if model_used else "Notation basique (IA locale indisponible)."
+            ("Notés par l'IA locale." if model_used else "Notation basique (IA locale indisponible).")
+            + (f" · modèle `{model_used}`" if ADVANCED and model_used else "")
         )
         picks: list[tuple[float, float]] = []
         pick_hints: list[tuple[str, str]] = []
@@ -581,6 +622,9 @@ if smart:
                 reasons = item.get("reasons") or []
                 if reasons:
                     st.caption(" · ".join(reasons))
+                if ADVANCED and item.get("transcript"):
+                    with st.expander("Transcript brut"):
+                        st.write(item["transcript"])
             if keep:
                 picks.append((float(item["start"]), float(item["end"])))
                 pick_hints.append((str(item["title"]), str(item["summary"])))
@@ -598,14 +642,15 @@ meta_ready = transcription_available()
 meta_on = st.toggle(
     "Générer titres & hashtags", value=False, disabled=not meta_ready, key="meta_on",
 )
+meta_model = pick_model() if (meta_on and ollama_available()) else None
 if not meta_ready:
     st.caption("Nécessite `pip install -r requirements-transcribe.txt`.")
 elif meta_on:
     st.caption(
         "Un fichier .txt (titre, description, hashtags) par clip — "
         + ("rédigé par l'IA locale." if ollama_available() else "génération basique (IA locale indisponible).")
+        + (f" · modèle `{meta_model}`" if ADVANCED and meta_model else "")
     )
-meta_model = pick_model() if (meta_on and ollama_available()) else None
 
 if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
     progress_bar = st.progress(0.0)
