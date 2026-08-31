@@ -12,8 +12,30 @@ from src.encoder import (
     video_encoder_args,
 )
 from src.quality import frame_size
+from src.reframe import crop_box
+from src.video_splitter import get_video_resolution
 
 ClipCallback = Callable[[Path], None]
+BACKGROUNDS = {"blur", "black", "reframe"}
+
+
+def _reframe_filter(source: Path, width: int, height: int, cmd_name: str) -> str:
+    src_w, src_h = get_video_resolution(source)
+    crop_w, crop_h = crop_box(src_w, src_h, width, height)
+    x0, y0 = (src_w - crop_w) // 2, (src_h - crop_h) // 2
+    return (
+        f"sendcmd=f={cmd_name},crop={crop_w}:{crop_h}:{x0}:{y0},"
+        f"scale={width}:{height},setsar=1,format=yuv420p"
+    )
+
+
+def _prepare_sidecar(sidecar: str | Path, run_dir: Path) -> str:
+    path = Path(sidecar)
+    if not path.is_file():
+        raise FileNotFoundError(f"Fichier introuvable : {path}")
+    if path.parent.resolve() != run_dir.resolve():
+        shutil.copyfile(path, run_dir / path.name)
+    return path.name
 
 
 def _black_background_filter(width: int, height: int, *, cuda: bool) -> str:
@@ -60,25 +82,22 @@ def resize_clip_for_vertical(
     start: float | None = None,
     duration: float | None = None,
     captions_file: str | Path | None = None,
+    crop_cmd_file: str | Path | None = None,
 ) -> Path:
-    """Place la vidéo source entière dans un cadre au ratio choisi, sans recadrage."""
-    source, destination = Path(input_path), Path(output_path)
+    """Recadre la vidéo source dans le cadre au ratio choisi (fond flou / bandes / visage)."""
+    # FFmpeg tourne depuis le dossier de sortie : le chemin source doit être absolu.
+    source, destination = Path(input_path).resolve(), Path(output_path)
     if not source.is_file():
         raise FileNotFoundError(f"Vidéo introuvable : {source}")
+    if background not in BACKGROUNDS:
+        raise ValueError("Le fond doit être 'blur', 'black' ou 'reframe'.")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    captions_name: str | None = None
-    if captions_file is not None:
-        captions_path = Path(captions_file)
-        if not captions_path.is_file():
-            raise FileNotFoundError(f"Sous-titres introuvables : {captions_path}")
-        # FFmpeg est lancé depuis le dossier de sortie ; le filtre `ass` reçoit un
-        # simple nom de fichier, ce qui évite les soucis d'échappement sous Windows.
-        captions_name = captions_path.name
-        if captions_path.parent.resolve() != destination.parent.resolve():
-            shutil.copyfile(captions_path, destination.parent / captions_name)
+    run_dir = destination.parent
+    captions_name = _prepare_sidecar(captions_file, run_dir) if captions_file is not None else None
+    crop_name = _prepare_sidecar(crop_cmd_file, run_dir) if crop_cmd_file is not None else None
+    if background == "reframe" and crop_name is None:
+        raise ValueError("Le recadrage visage exige un fichier sendcmd.")
     width, height = frame_size(quality, aspect)
-    if background not in {"blur", "black"}:
-        raise ValueError("Le fond doit être 'blur' ou 'black'.")
     if start is not None and start < 0:
         raise ValueError("Le début du clip ne peut pas être négatif.")
     if duration is not None and duration <= 0:
@@ -107,6 +126,11 @@ def resize_clip_for_vertical(
                 "-filter_complex", video_filter,
                 "-map", "[vout]", "-map", "0:a?",
             ])
+        elif background == "reframe":
+            video_filter = _reframe_filter(source, width, height, crop_name)
+            if captions_name:
+                video_filter += f",ass={captions_name}"
+            command.extend(["-vf", video_filter])
         else:
             video_filter = _black_background_filter(width, height, cuda=cuda)
             if captions_name:
@@ -121,12 +145,15 @@ def resize_clip_for_vertical(
         ])
         return command
 
-    run_dir = str(destination.parent)
-    result = subprocess.run(build_command(use_cuda), capture_output=True, text=True, cwd=run_dir)
+    result = subprocess.run(
+        build_command(use_cuda), capture_output=True, text=True, cwd=str(run_dir),
+    )
     if result.returncode != 0 and use_cuda:
         # Certains formats d'entrée ne sont pas acceptés par la chaîne CUDA.
         # L'encodage NVENC est conservé, seul le filtre repasse sur le CPU.
-        result = subprocess.run(build_command(False), capture_output=True, text=True, cwd=run_dir)
+        result = subprocess.run(
+            build_command(False), capture_output=True, text=True, cwd=str(run_dir),
+        )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "Échec du redimensionnement FFmpeg.")
     return destination
@@ -149,6 +176,7 @@ def segment_vertical(
     aspect: str = "9:16",
     background: str = "blur",
     captions_file: str | Path | None = None,
+    crop_cmd_file: str | Path | None = None,
     on_clip: ClipCallback | None = None,
 ) -> list[Path]:
     """Découpe + reformat en une seule passe FFmpeg (segment muxer).
@@ -156,11 +184,11 @@ def segment_vertical(
     La source n'est décodée qu'une fois, le graphe de filtres et l'encodeur ne
     sont initialisés qu'une fois. `on_clip` est appelé au fil des segments écrits.
     """
-    source, out = Path(input_path), Path(output_dir)
+    source, out = Path(input_path).resolve(), Path(output_dir)
     if not source.is_file():
         raise FileNotFoundError(f"Vidéo introuvable : {source}")
-    if background not in {"blur", "black"}:
-        raise ValueError("Le fond doit être 'blur' ou 'black'.")
+    if background not in BACKGROUNDS:
+        raise ValueError("Le fond doit être 'blur', 'black' ou 'reframe'.")
     span = window_end - window_start
     if span <= 0:
         raise ValueError("La fenêtre sélectionnée est vide.")
@@ -172,14 +200,10 @@ def segment_vertical(
     width, height = frame_size(quality, aspect)
     resolved_encoder = resolve_video_encoder(encoder)
 
-    captions_name: str | None = None
-    if captions_file is not None:
-        captions_path = Path(captions_file)
-        if not captions_path.is_file():
-            raise FileNotFoundError(f"Sous-titres introuvables : {captions_path}")
-        captions_name = captions_path.name
-        if captions_path.parent.resolve() != out.resolve():
-            shutil.copyfile(captions_path, out / captions_name)
+    captions_name = _prepare_sidecar(captions_file, out) if captions_file is not None else None
+    crop_name = _prepare_sidecar(crop_cmd_file, out) if crop_cmd_file is not None else None
+    if background == "reframe" and crop_name is None:
+        raise ValueError("Le recadrage visage exige un fichier sendcmd.")
 
     command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                "-ss", str(window_start), "-i", str(source), "-t", str(span)]
@@ -188,6 +212,11 @@ def segment_vertical(
         if captions_name:
             video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
         command += ["-filter_complex", video_filter, "-map", "[vout]", "-map", "0:a?"]
+    elif background == "reframe":
+        video_filter = _reframe_filter(source, width, height, crop_name)
+        if captions_name:
+            video_filter += f",ass={captions_name}"
+        command += ["-vf", video_filter]
     else:
         video_filter = _black_background_filter(width, height, cuda=False)
         if captions_name:

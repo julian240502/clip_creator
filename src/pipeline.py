@@ -16,6 +16,7 @@ from src.resizer import resize_clip_for_vertical, segment_vertical
 from src.transcribe import DEFAULT_MODEL
 from src.video_splitter import (
     get_video_duration,
+    get_video_resolution,
     resolve_source_window,
     split_video,
 )
@@ -37,6 +38,19 @@ def _window_text(transcript, start: float, end: float) -> str:
         word.text.strip() for word in transcript.words
         if word.end > start and word.start < end
     ).strip()
+
+
+def _make_crop_cmd(track, source_w, source_h, frame_w, frame_h, out_path, *, win_start, win_end):
+    from src.reframe import centred_crop_path, crop_box, crop_path, write_sendcmd
+
+    crop_w, crop_h = crop_box(source_w, source_h, frame_w, frame_h)
+    if track:
+        path = crop_path(track, source_w, source_h, crop_w, crop_h, t_start=win_start, t_end=win_end)
+    else:
+        path = centred_crop_path(source_w, source_h, crop_w, crop_h)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    return write_sendcmd(out_path, path)
 
 
 def _write_metadata_files(exports, windows, transcript, model, hints) -> None:
@@ -114,6 +128,16 @@ def process_video(
             # Aucune parole détectée : on garde les clips mais sans sous-titres.
             report(0.24, "Aucune parole détectée — clips générés sans sous-titres.")
             captions_style = None
+    reframe = vertical and vertical_background == "reframe"
+    face_track: list | None = None
+    source_dims = (0, 0)
+    if reframe:
+        from src.reframe import detect_face_track, reframe_available
+
+        source_dims = get_video_resolution(source)
+        if reframe_available():
+            report(0.24, "Analyse des visages…")
+            face_track = detect_face_track(source)
     if not vertical:
         report(0.25, f"Découpage via {encoder_label(resolved_encoder)}…")
         landscape = [
@@ -146,10 +170,17 @@ def process_video(
                     clip_start=clip_start, clip_end=clip_end,
                     width=frame_w, height=frame_h, style=captions_style,
                 )
+            crop_cmd = None
+            if reframe:
+                crop_cmd = _make_crop_cmd(
+                    face_track, *source_dims, frame_w, frame_h,
+                    output.with_suffix(".cmd"), win_start=clip_start, win_end=clip_end,
+                )
             clip_path = resize_clip_for_vertical(
                 source, output, encoder=encoder, encoding_speed=encoding_speed,
                 quality=quality.key, aspect=export_format, background=vertical_background,
-                start=clip_start, duration=clip_end - clip_start, captions_file=clip_captions,
+                start=clip_start, duration=clip_end - clip_start,
+                captions_file=clip_captions, crop_cmd_file=crop_cmd,
             )
             exports.append(clip_path)
             notify_clip(clip_path)
@@ -181,12 +212,19 @@ def process_video(
         )
         notify_clip(path)
 
+    crop_cmd = None
+    if reframe:
+        crop_cmd = _make_crop_cmd(
+            face_track, *source_dims, frame_w, frame_h,
+            project_dir / "vertical" / "reframe.cmd",
+            win_start=window_start, win_end=window_end,
+        )
     exports = segment_vertical(
         source, project_dir / "vertical",
         clip_length=clip_length, window_start=window_start, window_end=window_end,
         encoder=encoder, encoding_speed=encoding_speed, quality=quality.key,
         aspect=export_format, background=vertical_background, captions_file=captions_file,
-        on_clip=_on_segment,
+        crop_cmd_file=crop_cmd, on_clip=_on_segment,
     )
     if generate_meta and transcript is not None and transcript.words:
         report(0.96, "Titres & hashtags…")

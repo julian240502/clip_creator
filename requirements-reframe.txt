@@ -1,0 +1,4 @@
+# Recadrage sur le visage (optionnel) — active l'option « Recadrage sur le visage ».
+# Détection de visage frontal via OpenCV (Haar), sur CPU. ~40 Mo.
+-r requirements.txt
+opencv-python-headless>=4.8,<5

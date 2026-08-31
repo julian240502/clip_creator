@@ -27,6 +27,7 @@ from src.llm import prewarm as prewarm_llm
 from src.paths import SOURCE_CACHE_DIR
 from src.pipeline import process_video
 from src.quality import ASPECT_USAGE, frame_size, get_quality_preset
+from src.reframe import reframe_available
 from src.resizer import resize_clip_for_vertical
 from src.transcribe import (
     DEFAULT_MODEL,
@@ -78,7 +79,11 @@ QUALITY_CHOICES = {
     "HD · 720p — plus rapide": "720p",
     "4K · 2160p — meilleure qualité": "4k",
 }
-BACKGROUND_CHOICES = {"Fond vidéo flouté — recommandé": "blur", "Bandes noires": "black"}
+BACKGROUND_CHOICES = {
+    "Fond vidéo flouté — recommandé": "blur",
+    "Bandes noires": "black",
+    "Recadrage sur le visage (podcast / interview)": "reframe",
+}
 FORMAT_CHOICES = {
     "9:16 · Vertical": "9:16",
     "4:5 · Portrait": "4:5",
@@ -455,6 +460,17 @@ if vertical:
         unsafe_allow_html=True,
     )
     background = BACKGROUND_CHOICES[st.selectbox("Arrière-plan", list(BACKGROUND_CHOICES))]
+    if background == "reframe":
+        if reframe_available():
+            st.caption(
+                "Le cadre suit le visage principal (podcasts, interviews). "
+                "Ajoute une passe d'analyse des visages avant le rendu."
+            )
+        else:
+            st.warning(
+                "Recadrage visage indisponible : `pip install -r requirements-reframe.txt`. "
+                "En attendant, un recadrage centré sera appliqué."
+            )
 
 smart = st.radio(
     "Découpage", ["Régulier", "Sélection intelligente"], horizontal=True,

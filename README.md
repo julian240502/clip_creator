@@ -13,7 +13,8 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
 - découpage précis avec une durée configurable ;
 - choix du format d'export : 9:16, 4:5, 1:1, 16:9 ou format d'origine, en 720p / 1080p / 4K ;
 - la vidéo source tient entièrement dans le cadre, sans déformation ;
-- choix entre un arrière-plan vidéo flouté et des bandes noires ;
+- arrière-plan : vidéo floutée, bandes noires, ou **recadrage qui suit le visage**
+  (podcasts / interviews — optionnel, voir plus bas) ;
 - accélération matérielle automatique NVIDIA NVENC, Intel Quick Sync ou AMD AMF ;
 - redimensionnement CUDA sur NVIDIA pour le recadrage vertical ;
 - profils d'encodage rapide, équilibré ou qualité maximale ;
@@ -26,6 +27,21 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
   (repère les extraits au plus fort potentiel viral, les note et les classe) ;
 - titres, descriptions et hashtags générés par clip (optionnel), dans un `.txt`
   joint à chaque vidéo et à l'archive ZIP.
+
+## Recadrage sur le visage (optionnel)
+
+Pour les plans fixes de personne(s) qui parlent (podcasts, interviews), l'arrière-plan
+« Recadrage sur le visage » remplace le letterbox/flou par un **recadrage plein cadre qui
+suit le visage principal**. Nécessite OpenCV :
+
+```bash
+python -m pip install -r requirements-reframe.txt
+```
+
+Avant le rendu, une passe d'analyse (~45 s pour 10 min) échantillonne la vidéo, détecte le
+visage frontal le plus grand (Haar / OpenCV, CPU), lisse la trajectoire (EMA + zone morte),
+et pilote un `crop` dynamique FFmpeg via `sendcmd`. Sans OpenCV, ou si aucun visage n'est
+détecté, on retombe sur un recadrage centré.
 
 ## Sélection intelligente (optionnel)
 
