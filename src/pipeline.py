@@ -33,6 +33,32 @@ def _project_name(name: str) -> str:
     return slug[:60] or "video"
 
 
+def _safe_folder(name: str) -> str:
+    """Nom de dossier lisible (garde espaces/casse) mais sans caractère interdit."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", (name or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    return cleaned[:80] or "Clips"
+
+
+def _publish_to_folder(
+    exports: list[Path], export_dir: str | Path, label: str, session: str,
+) -> Path:
+    """Copie les clips (+ leur .txt) dans `<export_dir>/<créateur>/<session>/`.
+
+    Pensé pour pointer vers un dossier Google Drive synchronisé : les clips et
+    leurs titres/hashtags se retrouvent alors sur le téléphone.
+    """
+    target = Path(export_dir).expanduser() / _safe_folder(label) / session
+    target.mkdir(parents=True, exist_ok=True)
+    for clip in exports:
+        clip = Path(clip)
+        shutil.copy2(clip, target / clip.name)
+        sidecar = clip.with_suffix(".txt")
+        if sidecar.is_file():
+            shutil.copy2(sidecar, target / sidecar.name)
+    return target
+
+
 def _window_text(transcript, start: float, end: float) -> str:
     return " ".join(
         word.text.strip() for word in transcript.words
@@ -81,6 +107,8 @@ def process_video(
     generate_meta: bool = False,
     meta_model: str | None = None,
     clips_hints: list[tuple[str, str]] | None = None,
+    export_dir: str | Path | None = None,
+    export_label: str | None = None,
     on_clip: ClipCallback | None = None,
     progress: ProgressCallback | None = None,
 ) -> tuple[Path, list[Path]]:
@@ -89,9 +117,23 @@ def process_video(
     notify_clip = on_clip or (lambda _path: None)
     if bool(url) == bool(uploaded_path):
         raise ValueError("Fournissez une URL ou un fichier, mais pas les deux.")
+    if export_dir:
+        # Échoue tôt (avant le rendu) si le dossier d'export est inaccessible.
+        try:
+            Path(export_dir).expanduser().mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f"Dossier d'export inaccessible : {exc}") from exc
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     hint = Path(uploaded_path).stem if uploaded_path else "download"
     project_dir = Path(DATA_DIR) / "projects" / f"{stamp}-{_project_name(hint)}"
+    export_session = "-".join(project_dir.name.split("-")[:2])  # AAAAMMJJ-HHMMSS
+
+    def _maybe_publish(items: list[Path]) -> None:
+        if not export_dir:
+            return
+        dest = _publish_to_folder(items, export_dir, export_label or "", export_session)
+        report(0.99, f"Clips copiés vers {dest}")
+
     source_dir = project_dir / "source"
     source_dir.mkdir(parents=True, exist_ok=False)
     quality = get_quality_preset(export_quality)
@@ -147,6 +189,7 @@ def process_video(
                 on_clip=notify_clip,
             )
         ]
+        _maybe_publish(landscape)
         report(1.0, "Exports terminés")
         return project_dir, landscape
     if clips_windows:
@@ -186,6 +229,7 @@ def process_video(
         if generate_meta and transcript is not None and transcript.words:
             report(0.96, "Titres & hashtags…")
             _write_metadata_files(exports, windows, transcript, meta_model, clips_hints)
+        _maybe_publish(exports)
         report(1.0, "Exports terminés")
         return project_dir, exports
     # Découpage + format vertical en UNE passe : la source n'est décodée qu'une
@@ -233,5 +277,6 @@ def process_video(
             for k in range(len(exports))
         ]
         _write_metadata_files(exports, seg_windows, transcript, meta_model, None)
+    _maybe_publish(exports)
     report(1.0, "Exports terminés")
     return project_dir, exports

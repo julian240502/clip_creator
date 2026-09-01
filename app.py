@@ -131,7 +131,7 @@ def reset_source() -> None:
     for key in (
         "source", "clips", "project_dir", "captions_skipped",
         "style_preview", "style_preview_sig", "preview_at",
-        "highlights", "highlights_model",
+        "highlights", "highlights_model", "export_label",
     ):
         st.session_state.pop(key, None)
     shutil.rmtree(session_dir(), ignore_errors=True)
@@ -717,6 +717,23 @@ elif meta_on:
         + (f" · modèle `{meta_model}`" if ADVANCED and meta_model else "")
     )
 
+st.session_state.setdefault(
+    "export_label", (source.get("uploader") or source.get("title") or "").strip(),
+)
+with st.expander("Copier les clips dans un dossier (Google Drive…)"):
+    export_dir = st.text_input(
+        "Dossier de destination", key="export_dir",
+        placeholder=r"ex : C:\Users\toi\Mon Drive\Clips",
+    ).strip()
+    export_label = st.text_input(
+        "Créateur / streamer (nom du sous-dossier)", key="export_label",
+    ).strip()
+    if export_dir:
+        st.caption(
+            f"Clips + fichiers .txt copiés dans `{export_dir}\\{export_label or 'Clips'}\\<date>`. "
+            "Pointe-le vers ton dossier Google Drive synchronisé → tu les retrouves sur ton téléphone."
+        )
+
 if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
     progress_bar = st.progress(0.0)
     status = st.empty()
@@ -751,6 +768,8 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             generate_meta=meta_on,
             meta_model=meta_model,
             clips_hints=clips_hints,
+            export_dir=export_dir or None,
+            export_label=export_label or None,
             on_clip=on_clip,
             progress=on_progress,
         )

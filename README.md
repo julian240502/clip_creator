@@ -26,7 +26,10 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
 - deux modes de découpage : **régulier** (durée fixe) et **sélection intelligente**
   (repère les extraits au plus fort potentiel viral, les note et les classe) ;
 - titres, descriptions et hashtags générés par clip (optionnel), dans un `.txt`
-  joint à chaque vidéo et à l'archive ZIP.
+  joint à chaque vidéo et à l'archive ZIP — dans la langue de la vidéo ;
+- copie optionnelle des clips (+ leur `.txt`) vers un dossier au choix, rangés dans
+  un sous-dossier au nom du créateur puis par date — pointer vers un dossier Google
+  Drive synchronisé permet de récupérer les clips sur le téléphone.
 
 ## Recadrage sur le visage (optionnel)
 
