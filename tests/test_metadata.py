@@ -63,5 +63,19 @@ def test_generate_metadata_falls_back_when_the_llm_raises(monkeypatch) -> None:
     assert meta.hashtags
 
 
+def test_generate_metadata_prompt_targets_the_source_language(monkeypatch) -> None:
+    seen: dict[str, str] = {}
+
+    def _capture(system, _user, **_k):
+        seen["system"] = system
+        return {"title": "T", "description": "D", "hashtags": ["#a"]}
+
+    monkeypatch.setattr(llm, "chat_json", _capture)
+    generate_metadata(_TEXT, model="llama3", language="en")
+    assert "anglais" in seen["system"]
+    generate_metadata(_TEXT, model="llama3", language=None)
+    assert "même langue que la transcription" in seen["system"]
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-q"])

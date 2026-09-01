@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.llm import language_name
+
 _STOPWORDS = {
     "dans", "pour", "avec", "cette", "votre", "nous", "vous", "mais", "donc", "alors",
     "être", "fait", "plus", "tout", "tous", "comme", "leur", "sont", "cela",
@@ -17,12 +19,16 @@ _STOPWORDS = {
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
 _WORD_RE = re.compile(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]{3,}")
 
-_SYSTEM_PROMPT = (
-    "Tu génères les métadonnées d'un clip court à partir de sa transcription. "
-    'Réponds UNIQUEMENT en JSON : {"title": "<accroche en français, max 12 mots>", '
-    '"description": "<2 phrases max, en français, qui donnent envie de regarder>", '
-    '"hashtags": ["#motcle", ...] (5 à 8, en français, sans espace, pertinents)}.'
-)
+def _system_prompt(language: str | None) -> str:
+    name = language_name(language)
+    target = name if name != "la langue de la transcription" else "la même langue que la transcription"
+    return (
+        "Tu génères les métadonnées d'un clip court à partir de sa transcription. "
+        'Réponds UNIQUEMENT en JSON : {"title": "<accroche, max 12 mots>", '
+        '"description": "<2 phrases max qui donnent envie de regarder>", '
+        '"hashtags": ["#motcle", ...] (5 à 8, sans espace, pertinents)}. '
+        f"Rédige le titre, la description ET les hashtags en {target}, jamais dans une autre langue."
+    )
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,7 @@ def generate_metadata(
     hint_title: str = "",
     hint_summary: str = "",
     model: str | None = None,
+    language: str | None = None,
 ) -> ClipMeta:
     text = text.strip()
     if not text:
@@ -79,7 +86,8 @@ def generate_metadata(
             from src.llm import chat_json
 
             data = chat_json(
-                _SYSTEM_PROMPT, f'Transcription :\n"""\n{text}\n"""', model=model, timeout=90.0,
+                _system_prompt(language), f'Transcription :\n"""\n{text}\n"""',
+                model=model, timeout=90.0,
             )
             tags = [str(tag).strip() for tag in data.get("hashtags", []) if str(tag).strip()]
             tags = [tag if tag.startswith("#") else f"#{tag}" for tag in tags]

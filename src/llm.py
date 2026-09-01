@@ -14,6 +14,27 @@ DEFAULT_HOST = "http://localhost:11434"
 # Ordre de préférence : meilleur suivi de consignes / JSON / français en tête.
 _MODEL_PREFERENCE = ("qwen2.5", "llama3.1", "llama3", "mistral", "gemma2", "phi3", "llama2")
 
+# Nom (en français) des langues renvoyées par Whisper — pour cadrer la langue de
+# sortie des prompts (titres, résumés, hashtags dans la langue de la vidéo).
+_LANGUAGE_NAMES = {
+    "en": "anglais", "fr": "français", "es": "espagnol", "de": "allemand",
+    "it": "italien", "pt": "portugais", "nl": "néerlandais", "pl": "polonais",
+    "ru": "russe", "uk": "ukrainien", "tr": "turc", "ar": "arabe", "hi": "hindi",
+    "ja": "japonais", "ko": "coréen", "zh": "chinois", "ro": "roumain",
+    "sv": "suédois", "da": "danois", "no": "norvégien", "fi": "finnois",
+    "id": "indonésien", "vi": "vietnamien", "cs": "tchèque", "el": "grec",
+}
+
+
+def language_name(code: str | None) -> str:
+    """Nom lisible d'une langue ISO (« en » → « anglais »).
+
+    Repli neutre quand la langue est inconnue ou absente, pour que le prompt
+    dise quand même « garde la langue de la transcription ».
+    """
+    key = (code or "").strip().lower().replace("_", "-").split("-")[0]
+    return _LANGUAGE_NAMES.get(key, "la langue de la transcription")
+
 
 def ollama_available(host: str = DEFAULT_HOST, timeout: float = 1.5) -> bool:
     try:

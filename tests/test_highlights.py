@@ -12,8 +12,11 @@ from src.highlights import (
     _normalise_rating,
     _opening,
     _pre_score,
+    _rate_heuristic,
     _sentence_units,
     _short_label,
+    _system_batch,
+    _system_one,
     find_highlights,
 )
 from src.transcribe import Transcript, TranscriptSegment, Word
@@ -164,6 +167,21 @@ def test_normalise_rating_hook_absent_is_flagged_minus_one() -> None:
     out = _normalise_rating({"score": 60, "title": "T", "summary": "S"}, "fallback")
     assert out["hook_score"] == -1
     assert out["hook_line"] == ""
+
+
+def test_system_prompts_target_the_transcript_language() -> None:
+    assert "anglais" in _system_batch("en") and "anglais" in _system_one("en")
+    assert "français" in _system_batch("fr")
+    # Langue inconnue / absente -> consigne neutre, jamais un défaut FR figé.
+    assert "même langue que la transcription" in _system_batch(None)
+    assert "FR" not in _system_batch("en")  # plus de "accroche FR" en dur
+
+
+def test_rate_heuristic_reasons_follow_the_language() -> None:
+    en = _rate_heuristic("Why do 90% of people quit so fast?", 0.5, "en")
+    fr = _rate_heuristic("Pourquoi 90 % des gens abandonnent si vite ?", 0.5, "fr")
+    assert any(r[0].isupper() and "question" in r.lower() for r in en["reasons"])
+    assert any("Contient" in r for r in fr["reasons"])
 
 
 def test_pre_score_rewards_a_question_hook() -> None:

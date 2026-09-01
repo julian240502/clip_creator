@@ -60,6 +60,7 @@ def _write_metadata_files(exports, windows, transcript, model, hints) -> None:
         meta = generate_metadata(
             _window_text(transcript, clip_start, clip_end),
             hint_title=hint_title, hint_summary=hint_summary, model=model,
+            language=transcript.language,
         )
         write_metadata(meta, Path(clip_path).with_suffix(".txt"))
 
