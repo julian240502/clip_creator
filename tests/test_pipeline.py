@@ -255,6 +255,27 @@ def test_url_validation() -> None:
         _validate_url("not-a-url")
 
 
+def test_client_opts_reads_cookie_env(monkeypatch) -> None:
+    from src.downloader import _client_opts
+
+    for var in (
+        "CLIP_CREATOR_YTDLP_COOKIES_BROWSER",
+        "CLIP_CREATOR_YTDLP_COOKIES_FILE",
+        "CLIP_CREATOR_YTDLP_PLAYER_CLIENT",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    assert _client_opts() == {}
+
+    monkeypatch.setenv("CLIP_CREATOR_YTDLP_COOKIES_BROWSER", "Firefox")
+    assert _client_opts()["cookiesfrombrowser"] == ("firefox", None, None, None)
+
+    monkeypatch.setenv("CLIP_CREATOR_YTDLP_COOKIES_BROWSER", "chrome:Profile 1")
+    monkeypatch.setenv("CLIP_CREATOR_YTDLP_PLAYER_CLIENT", "android, web")
+    opts = _client_opts()
+    assert opts["cookiesfrombrowser"][:2] == ("chrome", "Profile 1")
+    assert opts["extractor_args"] == {"youtube": {"player_client": ["android", "web"]}}
+
+
 def test_4k_download_selector() -> None:
     assert _format_selector(2160) == "bv*[height<=2160]+ba/b[height<=2160]/b"
 

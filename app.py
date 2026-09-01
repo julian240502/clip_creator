@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import shutil
 import subprocess
 import tempfile
@@ -370,12 +371,17 @@ def render_diagnostics() -> None:
         blur_mode = "CUDA (CLIP_CREATOR_CUDA_BLUR=1)" if cuda_scaling_available() else "logiciel (CUDA indisponible)"
     else:
         blur_mode = "logiciel"
+    cookies = (
+        os.environ.get("CLIP_CREATOR_YTDLP_COOKIES_BROWSER")
+        or os.environ.get("CLIP_CREATOR_YTDLP_COOKIES_FILE")
+    )
     st.markdown(
         f"- IA locale : {f'`{llm_model}`' if llm_model else '_absente_'}\n"
         f"- Transcription : {f'`{whisper}`' if whisper else '_absente_'}\n"
         f"- Recadrage visage : {'ok' if reframe_available() else '_absent_'}\n"
         f"- Encodeur vidéo : `{video_encoder}`\n"
-        f"- Fond flou : {blur_mode}"
+        f"- Fond flou : {blur_mode}\n"
+        f"- Cookies YouTube : {f'`{cookies}`' if cookies else '_non configurés_'}"
     )
     st.caption(f"Session · `{session_dir()}`")
     st.caption(f"Cache sources · `{SOURCE_CACHE_DIR}`")
@@ -422,6 +428,14 @@ if "source" not in st.session_state:
                         st.rerun()
                     except Exception as exc:  # noqa: BLE001 - message affiché tel quel
                         st.error(f"Impossible de charger cette URL : {exc}")
+                        if "sign in to confirm" in str(exc).lower() or "cookies" in str(exc).lower():
+                            st.info(
+                                "YouTube demande une authentification. Ferme l'app, lance :\n\n"
+                                "`$env:CLIP_CREATOR_YTDLP_COOKIES_BROWSER=\"chrome\"`  "
+                                "(ou `firefox`, `edge`, `brave`)\n\n"
+                                "puis relance l'app. yt-dlp lira les cookies de ton navigateur "
+                                "connecté à YouTube. Pense aussi à `pip install -U yt-dlp`."
+                            )
     with tab_file:
         uploaded = st.file_uploader("Déposer une vidéo", type=["mp4", "mov", "mkv", "webm"])
         if uploaded is not None and st.button("Charger la vidéo", key="load_file", use_container_width=True):

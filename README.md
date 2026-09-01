@@ -147,6 +147,21 @@ Pour vérifier les encodeurs présents sous Windows :
 ffmpeg -hide_banner -encoders | Select-String "h264_nvenc|h264_qsv|h264_amf"
 ```
 
+## URL YouTube : « Sign in to confirm you're not a bot »
+
+YouTube exige de plus en plus une authentification pour télécharger. Avant de
+lancer l'app, indiquer le navigateur connecté à YouTube dont `yt-dlp` doit lire
+les cookies :
+
+```powershell
+$env:CLIP_CREATOR_YTDLP_COOKIES_BROWSER = "chrome"   # ou firefox, edge, brave
+# profil précis : "chrome:Profile 1"
+```
+
+Autres variables : `CLIP_CREATOR_YTDLP_COOKIES_FILE` (chemin d'un `cookies.txt`
+exporté) et `CLIP_CREATOR_YTDLP_PLAYER_CLIENT` (ex. `android,web`, dépannage).
+Le mode avancé (barre latérale) affiche si des cookies sont configurés.
+
 ## Tests
 
 ```bash

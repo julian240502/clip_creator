@@ -1,12 +1,40 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
 from yt_dlp import YoutubeDL
 
 from src.paths import RAW_VIDEOS_DIR
+
+
+def _client_opts() -> dict:
+    """Options yt-dlp partagées : contourne le « Sign in to confirm you're not a bot ».
+
+    YouTube exige de plus en plus une authentification. Renseigner l'une de ces
+    variables d'environnement avant de lancer l'app :
+
+      CLIP_CREATOR_YTDLP_COOKIES_BROWSER=chrome   (ou firefox, edge, brave… ;
+                                                   « chrome:Profile 1 » pour un profil)
+      CLIP_CREATOR_YTDLP_COOKIES_FILE=C:\\chemin\\cookies.txt
+      CLIP_CREATOR_YTDLP_PLAYER_CLIENT=android,web   (optionnel, dépannage)
+    """
+    opts: dict = {}
+    browser = os.environ.get("CLIP_CREATOR_YTDLP_COOKIES_BROWSER", "").strip()
+    if browser:
+        name, _, profile = browser.partition(":")
+        opts["cookiesfrombrowser"] = (name.strip().lower(), profile.strip() or None, None, None)
+    cookie_file = os.environ.get("CLIP_CREATOR_YTDLP_COOKIES_FILE", "").strip()
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
+    clients = os.environ.get("CLIP_CREATOR_YTDLP_PLAYER_CLIENT", "").strip()
+    if clients:
+        opts["extractor_args"] = {
+            "youtube": {"player_client": [c.strip() for c in clients.split(",") if c.strip()]}
+        }
+    return opts
 
 
 def _format_selector(max_height: int) -> str:
@@ -31,6 +59,7 @@ def probe_url(video_url: str) -> dict:
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
+        **_client_opts(),
     }
     with YoutubeDL(options) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -65,6 +94,7 @@ def download_video(
         "overwrites": False,
         "quiet": True,
         "no_warnings": True,
+        **_client_opts(),
     }
     with YoutubeDL(options) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -113,6 +143,7 @@ def download_clip(
         "no_warnings": True,
         "download_ranges": lambda _info, _ydl: [{"start_time": float(start), "end_time": float(end)}],
         "force_keyframes_at_cuts": True,
+        **_client_opts(),
     }
     with YoutubeDL(options) as ydl:
         if not ydl.extract_info(url, download=True):
