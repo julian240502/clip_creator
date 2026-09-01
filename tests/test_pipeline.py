@@ -104,6 +104,26 @@ def test_safe_folder_sanitises_and_falls_back() -> None:
     assert _safe_folder("A" * 200) == "A" * 80
 
 
+def test_publish_to_folder_splits_clips_and_texts(tmp_path: Path) -> None:
+    from src.pipeline import _publish_to_folder
+
+    src = tmp_path / "vertical"
+    src.mkdir()
+    (src / "clip_001.mp4").write_bytes(b"v")
+    (src / "clip_001.txt").write_text("Titre\n\nDescription\n\n#a #b", encoding="utf-8")
+    (src / "clip_002.mp4").write_bytes(b"v")  # pas de .txt
+
+    drive = tmp_path / "drive"
+    root = _publish_to_folder(
+        [src / "clip_001.mp4", src / "clip_002.mp4"], drive, "Cool Streamer", "20260901-120000",
+    )
+    assert root == drive / "Cool Streamer" / "20260901-120000"
+    assert (root / "clips" / "clip_001.mp4").is_file()
+    assert (root / "clips" / "clip_002.mp4").is_file()
+    assert (root / "textes" / "clip_001.txt").is_file()   # même nom que le clip
+    assert not (root / "textes" / "clip_002.txt").exists()
+
+
 def test_process_video_copies_exports_into_the_export_folder(
     sample_video: Path, tmp_path: Path, monkeypatch,
 ) -> None:
@@ -117,10 +137,9 @@ def test_process_video_copies_exports_into_the_export_folder(
         clips_windows=[(0.0, 1.0), (2.0, 3.0)],
         export_dir=drive, export_label="Cool Streamer",
     )
-    creator_dir = drive / "Cool Streamer"
-    sessions = list(creator_dir.iterdir())
+    sessions = list((drive / "Cool Streamer").iterdir())
     assert len(sessions) == 1  # un sous-dossier daté par run
-    copied = sorted(p.name for p in sessions[0].glob("*.mp4"))
+    copied = sorted(p.name for p in (sessions[0] / "clips").glob("*.mp4"))
     assert copied == ["clip_001.mp4", "clip_002.mp4"]
     assert len(copied) == len(clips)
 

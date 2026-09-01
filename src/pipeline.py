@@ -43,20 +43,25 @@ def _safe_folder(name: str) -> str:
 def _publish_to_folder(
     exports: list[Path], export_dir: str | Path, label: str, session: str,
 ) -> Path:
-    """Copie les clips (+ leur .txt) dans `<export_dir>/<créateur>/<session>/`.
+    """Copie les clips et leurs `.txt` dans `<export_dir>/<créateur>/<session>/`.
 
-    Pensé pour pointer vers un dossier Google Drive synchronisé : les clips et
-    leurs titres/hashtags se retrouvent alors sur le téléphone.
+    Deux sous-dossiers parallèles : `clips/` (vidéos) et `textes/` (titre +
+    description + hashtags), le `.txt` gardant le nom du clip → on retrouve
+    facilement la paire. Pensé pour un dossier Google Drive synchronisé : tout
+    se retrouve sur le téléphone, prêt à poster.
     """
-    target = Path(export_dir).expanduser() / _safe_folder(label) / session
-    target.mkdir(parents=True, exist_ok=True)
+    root = Path(export_dir).expanduser() / _safe_folder(label) / session
+    clips_dir = root / "clips"
+    texts_dir = root / "textes"
+    clips_dir.mkdir(parents=True, exist_ok=True)
     for clip in exports:
         clip = Path(clip)
-        shutil.copy2(clip, target / clip.name)
+        shutil.copy2(clip, clips_dir / clip.name)
         sidecar = clip.with_suffix(".txt")
         if sidecar.is_file():
-            shutil.copy2(sidecar, target / sidecar.name)
-    return target
+            texts_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(sidecar, texts_dir / sidecar.name)
+    return root
 
 
 def _window_text(transcript, start: float, end: float) -> str:

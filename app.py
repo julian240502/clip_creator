@@ -82,6 +82,9 @@ label p, [data-testid="stWidgetLabel"] p {color:#e2e3f0 !important}
 )
 
 WORK_ROOT = Path(tempfile.gettempdir()) / "clip-creator"
+# Pré-rempli dans « Copier les clips dans un dossier » — le dossier Google Drive
+# synchronisé de l'owner. Modifiable dans l'UI, mémorisé pour la session.
+DEFAULT_EXPORT_DIR = r"G:\My Drive\CLIPS"
 QUALITY_CHOICES = {
     "Full HD · 1080p — recommandé": "1080p",
     "HD · 720p — plus rapide": "720p",
@@ -715,21 +718,21 @@ elif meta_on:
         + (f" · modèle `{meta_model}`" if ADVANCED and meta_model else "")
     )
 
+st.session_state.setdefault("export_dir", DEFAULT_EXPORT_DIR)
 st.session_state.setdefault(
     "export_label", (source.get("uploader") or source.get("title") or "").strip(),
 )
 with st.expander("Copier les clips dans un dossier (Google Drive…)"):
-    export_dir = st.text_input(
-        "Dossier de destination", key="export_dir",
-        placeholder=r"ex : C:\Users\toi\Mon Drive\Clips",
-    ).strip()
+    export_dir = st.text_input("Dossier de destination", key="export_dir").strip()
     export_label = st.text_input(
         "Créateur / streamer (nom du sous-dossier)", key="export_label",
     ).strip()
     if export_dir:
+        base = f"{export_dir}\\{export_label or 'Clips'}\\<date>"
         st.caption(
-            f"Clips + fichiers .txt copiés dans `{export_dir}\\{export_label or 'Clips'}\\<date>`. "
-            "Pointe-le vers ton dossier Google Drive synchronisé → tu les retrouves sur ton téléphone."
+            f"Vidéos dans `{base}\\clips\\`, titres/description/hashtags dans "
+            f"`{base}\\textes\\` (même nom que le clip). "
+            "Pointe le dossier vers ton Google Drive synchronisé → tout sur le téléphone."
         )
 
 if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
