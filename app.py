@@ -428,13 +428,25 @@ if "source" not in st.session_state:
                         st.rerun()
                     except Exception as exc:  # noqa: BLE001 - message affiché tel quel
                         st.error(f"Impossible de charger cette URL : {exc}")
-                        if "sign in to confirm" in str(exc).lower() or "cookies" in str(exc).lower():
+                        msg = str(exc).lower()
+                        if "could not copy" in msg or "cookie database" in msg or "7271" in msg:
                             st.info(
-                                "YouTube demande une authentification. Ferme l'app, lance :\n\n"
-                                "`$env:CLIP_CREATOR_YTDLP_COOKIES_BROWSER=\"chrome\"`  "
-                                "(ou `firefox`, `edge`, `brave`)\n\n"
-                                "puis relance l'app. yt-dlp lira les cookies de ton navigateur "
-                                "connecté à YouTube. Pense aussi à `pip install -U yt-dlp`."
+                                "Chrome/Edge chiffrent leur base de cookies (Windows) — yt-dlp "
+                                "ne peut pas la lire. Exporte plutôt un fichier `cookies.txt` "
+                                "depuis YouTube (extension « Get cookies.txt LOCALLY »), puis "
+                                "avant de relancer l'app dans **le même terminal** :\n\n"
+                                "`$env:CLIP_CREATOR_YTDLP_COOKIES_FILE=\"C:\\chemin\\cookies.txt\"`\n\n"
+                                "Alternative : `$env:CLIP_CREATOR_YTDLP_COOKIES_BROWSER=\"firefox\"` "
+                                "(Firefox n'a pas ce blocage)."
+                            )
+                        elif "sign in to confirm" in msg or "cookies" in msg or "bot" in msg:
+                            st.info(
+                                "YouTube demande une authentification. Dans le terminal qui lance "
+                                "l'app, puis relance-la :\n\n"
+                                "`$env:CLIP_CREATOR_YTDLP_COOKIES_BROWSER=\"firefox\"`  "
+                                "(ou `chrome`, `edge`, `brave`)\n\n"
+                                "ou un fichier exporté : "
+                                "`$env:CLIP_CREATOR_YTDLP_COOKIES_FILE=\"C:\\chemin\\cookies.txt\"`."
                             )
     with tab_file:
         uploaded = st.file_uploader("Déposer une vidéo", type=["mp4", "mov", "mkv", "webm"])
