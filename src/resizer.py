@@ -21,15 +21,15 @@ BACKGROUNDS = {"blur", "black", "reframe"}
 
 
 def _cuda_blur_enabled() -> bool:
-    """Accélère le montage du fond flou via CUDA — activé par défaut si dispo.
+    """Accélère le montage du fond flou via CUDA — DÉSACTIVÉ par défaut.
 
-    Seul le redimensionnement passe sur GPU (`scale_cuda`) ; `boxblur` et
-    `overlay` restent logiciels, `overlay_cuda` n'est jamais utilisé (zones
-    vertes sur certains builds). Repli CPU automatique en cas d'échec.
-    Forcer l'arrêt : variable d'environnement CLIP_CREATOR_CUDA_BLUR=0.
+    La chaîne `scale_cuda` + `hwdownload` + `boxblur` + `overlay` produit des
+    zones vertes sur certains contenus/builds (plans de chroma décalés). Le
+    fond flou reste donc en filtres logiciels par défaut. Pour tester :
+    variable d'environnement CLIP_CREATOR_CUDA_BLUR=1.
     """
-    return os.environ.get("CLIP_CREATOR_CUDA_BLUR", "").strip().lower() not in {
-        "0", "false", "off", "no",
+    return os.environ.get("CLIP_CREATOR_CUDA_BLUR", "").strip().lower() in {
+        "1", "true", "on", "yes",
     }
 
 

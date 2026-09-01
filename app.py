@@ -363,12 +363,10 @@ def render_diagnostics() -> None:
         video_encoder = encoder_label(resolve_video_encoder("auto"))
     except Exception:  # noqa: BLE001 - aucun encodeur matériel/logiciel utilisable
         video_encoder = "indisponible"
-    if not cuda_scaling_available():
-        blur_mode = "logiciel (CUDA indisponible)"
-    elif _cuda_blur_enabled():
-        blur_mode = "CUDA"
+    if _cuda_blur_enabled():
+        blur_mode = "CUDA (CLIP_CREATOR_CUDA_BLUR=1)" if cuda_scaling_available() else "logiciel (CUDA indisponible)"
     else:
-        blur_mode = "logiciel (CLIP_CREATOR_CUDA_BLUR=0)"
+        blur_mode = "logiciel"
     st.markdown(
         f"- IA locale : {f'`{llm_model}`' if llm_model else '_absente_'}\n"
         f"- Transcription : {f'`{whisper}`' if whisper else '_absente_'}\n"
