@@ -18,17 +18,35 @@ _STOPWORDS = {
 }
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
 _WORD_RE = re.compile(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]{3,}")
+_MAX_CONTEXT_CHARS = 1500
 
 def _system_prompt(language: str | None) -> str:
     name = language_name(language)
     target = name if name != "la langue de la transcription" else "la même langue que la transcription"
     return (
         "Tu génères les métadonnées d'un clip court à partir de sa transcription. "
+        "Le titre de la vidéo source et un extrait plus large de la transcription "
+        "te sont fournis pour comprendre le sujet général et éviter les contresens : "
+        "utilise-les pour choisir des hashtags et un vocabulaire pertinents, mais le "
+        "titre et la description doivent porter sur CE clip précis, pas sur la vidéo entière. "
         'Réponds UNIQUEMENT en JSON : {"title": "<accroche, max 12 mots>", '
         '"description": "<2 phrases max qui donnent envie de regarder>", '
         '"hashtags": ["#motcle", ...] (5 à 8, sans espace, pertinents)}. '
         f"Rédige le titre, la description ET les hashtags en {target}, jamais dans une autre langue."
     )
+
+
+def _user_prompt(text: str, video_title: str, video_context: str) -> str:
+    parts = []
+    if video_title.strip():
+        parts.append(f'Titre de la vidéo source : "{video_title.strip()}"')
+    if video_context.strip():
+        parts.append(
+            "Extrait plus large de la vidéo (contexte, pas le clip) :\n\"\"\"\n"
+            f"{video_context.strip()[:_MAX_CONTEXT_CHARS]}\n\"\"\""
+        )
+    parts.append(f'Transcription du clip :\n"""\n{text}\n"""')
+    return "\n\n".join(parts)
 
 
 @dataclass(frozen=True)
@@ -77,6 +95,8 @@ def generate_metadata(
     hint_summary: str = "",
     model: str | None = None,
     language: str | None = None,
+    video_title: str = "",
+    video_context: str = "",
 ) -> ClipMeta:
     text = text.strip()
     if not text:
@@ -86,7 +106,7 @@ def generate_metadata(
             from src.llm import chat_json
 
             data = chat_json(
-                _system_prompt(language), f'Transcription :\n"""\n{text}\n"""',
+                _system_prompt(language), _user_prompt(text, video_title, video_context),
                 model=model, timeout=90.0,
             )
             tags = [str(tag).strip() for tag in data.get("hashtags", []) if str(tag).strip()]
