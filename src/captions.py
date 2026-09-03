@@ -51,6 +51,8 @@ class CaptionStyle:
     box_alpha: int = 160          # 0 = opaque, 255 = transparent
     position: str = "bottom"      # top | middle | bottom
     margin_v: int = 200           # pixels depuis le bord (haut ou bas)
+    nudge_x: int = 0              # décalage fin en px (+ = vers la droite)
+    nudge_y: int = 0              # décalage fin en px (+ = vers le haut)
     uppercase: bool = False
     mode: str = "active"          # lines | word | karaoke | active
     max_words: int = 5
@@ -78,6 +80,23 @@ TEMPLATES: dict[str, CaptionStyle] = {
 }
 
 _ALIGNMENT = {"bottom": 2, "middle": 5, "top": 8}
+
+
+def _pos_override(width: int, height: int, style: CaptionStyle) -> str:
+    r"""`\pos(x,y)` quand l'utilisateur décale les sous-titres au pixel près.
+
+    Chaîne vide sinon : on garde le placement par alignement + MarginV.
+    """
+    if not (style.nudge_x or style.nudge_y):
+        return ""
+    x = round(width / 2) + style.nudge_x
+    if style.position == "top":
+        y = style.margin_v
+    elif style.position == "middle":
+        y = round(height / 2)
+    else:
+        y = height - style.margin_v
+    return f"\\pos({x},{y - style.nudge_y})"
 
 
 # --- Helpers ASS -----------------------------------------------------------------
@@ -174,16 +193,16 @@ def _clamp_line_ends(lines: list[_Line], clip_duration: float, hold: float = 0.3
 
 
 # --- Génération des évènements par mode --------------------------------------
-def _events_lines(lines: list[_Line], style: CaptionStyle, align: int):
+def _events_lines(lines: list[_Line], style: CaptionStyle, align: int, pos: str = ""):
     for line in lines:
-        tags = f"\\an{align}"
+        tags = f"\\an{align}{pos}"
         if style.fade_ms:
             tags += f"\\fad({style.fade_ms},{style.fade_ms})"
         body = " ".join(_word_text(word, style) for word in line.words)
         yield line.start, line.end, f"{{{tags}}}{body}"
 
 
-def _events_active(lines: list[_Line], style: CaptionStyle, align: int):
+def _events_active(lines: list[_Line], style: CaptionStyle, align: int, pos: str = ""):
     highlight = _ass_colour(style.highlight_color)
     for line in lines:
         count = len(line.words)
@@ -198,13 +217,13 @@ def _events_active(lines: list[_Line], style: CaptionStyle, align: int):
                 if j == i:
                     token = f"{{\\c{highlight}\\fscx112\\fscy112}}{token}{{\\r}}"
                 parts.append(token)
-            tags = f"\\an{align}"
+            tags = f"\\an{align}{pos}"
             if style.fade_ms and i == 0:
                 tags += f"\\fad({style.fade_ms},0)"
             yield seg_start, seg_end, f"{{{tags}}}" + " ".join(parts)
 
 
-def _events_word(lines: list[_Line], style: CaptionStyle, align: int):
+def _events_word(lines: list[_Line], style: CaptionStyle, align: int, pos: str = ""):
     pop = "\\fscx62\\fscy62\\t(0,90,\\fscx100\\fscy100)"
     for line in lines:
         count = len(line.words)
@@ -213,13 +232,13 @@ def _events_word(lines: list[_Line], style: CaptionStyle, align: int):
             seg_end = line.words[i + 1].start if i + 1 < count else line.end
             if seg_end <= seg_start:
                 continue
-            tags = f"\\an{align}{pop}"
+            tags = f"\\an{align}{pos}{pop}"
             if style.fade_ms:
                 tags += f"\\fad({min(style.fade_ms, 80)},60)"
             yield seg_start, seg_end, f"{{{tags}}}{_word_text(word, style)}"
 
 
-def _events_karaoke(lines: list[_Line], style: CaptionStyle, align: int):
+def _events_karaoke(lines: list[_Line], style: CaptionStyle, align: int, pos: str = ""):
     for line in lines:
         count = len(line.words)
         chunks = []
@@ -227,7 +246,7 @@ def _events_karaoke(lines: list[_Line], style: CaptionStyle, align: int):
             end = line.words[i + 1].start if i + 1 < count else word.end
             duration_cs = max(1, round((end - word.start) * 100))
             chunks.append(f"{{\\kf{duration_cs}}}{_word_text(word, style)}")
-        tags = f"\\an{align}"
+        tags = f"\\an{align}{pos}"
         if style.fade_ms:
             tags += f"\\fad({style.fade_ms},{style.fade_ms})"
         yield line.start, line.end, f"{{{tags}}}" + " ".join(chunks)
@@ -301,7 +320,8 @@ def build_ass(
     lines = _group_lines(words, max_words=style.max_words, max_duration=style.max_duration)
     _clamp_line_ends(lines, clip_end - clip_start)
     align = _ALIGNMENT.get(style.position, 2)
-    events = list(_EMITTERS[style.mode](lines, style, align))
+    pos = _pos_override(width, height, style)
+    events = list(_EMITTERS[style.mode](lines, style, align, pos))
     return _document(width, height, style, events)
 
 

@@ -9,3 +9,5 @@ venv/
 .venv/
 .test-artifacts/
 venvSchool/
+
+windows/clip-creator.ico

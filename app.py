@@ -85,7 +85,7 @@ label p, [data-testid="stWidgetLabel"] p {color:#e2e3f0 !important}
 WORK_ROOT = Path(tempfile.gettempdir()) / "clip-creator"
 # Pré-rempli dans « Copier les clips dans un dossier » — le dossier Google Drive
 # synchronisé de l'owner. Modifiable dans l'UI, mémorisé pour la session.
-DEFAULT_EXPORT_DIR = r"G:\My Drive\CLIPS"
+DEFAULT_EXPORT_DIR = r"G:\Mon Drive\CLIPS"
 QUALITY_CHOICES = {
     "Full HD · 1080p — recommandé": "1080p",
     "HD · 720p — plus rapide": "720p",
@@ -242,7 +242,7 @@ def _transcript_has_words(project_dir: str) -> bool:
         return False
 
 
-def render_captions_controls(source: dict, window, aspect: str, background: str):
+def render_captions_controls(source: dict, window, aspect: str, background: str, quality_key: str):
     """Toggle + panneau de style des sous-titres. Renvoie le CaptionStyle ou None."""
     ready = transcription_available()
     reframed = aspect != "source"
@@ -279,14 +279,21 @@ def render_captions_controls(source: dict, window, aspect: str, background: str)
         highlight_color = col_e.color_picker("Couleur du mot actif", base.highlight_color)
         mode_label = st.selectbox(
             "Apparition", list(CAPTION_MODES),
-            index=list(CAPTION_MODES.values()).index(base.mode),
+            index=list(CAPTION_MODES).index("Mot par mot"),  # défaut : mot par mot
+            key="caption_mode",
         )
+        col_x, col_y = st.columns(2)
+        nudge_x = col_x.slider("Décalage horizontal (px)", -300, 300, base.nudge_x, 5,
+                               help="+ vers la droite")
+        nudge_y = col_y.slider("Décalage vertical (px)", -400, 400, base.nudge_y, 5,
+                               help="+ vers le haut")
         uppercase = st.toggle("MAJUSCULES", value=base.uppercase)
         style = replace(
             base, font=font, font_size=font_size,
             position=CAPTION_POSITIONS[position_label],
             primary_color=primary_color, highlight_color=highlight_color,
             mode=CAPTION_MODES[mode_label], uppercase=uppercase,
+            nudge_x=nudge_x, nudge_y=nudge_y,
         )
         style_sig = json.dumps(asdict(style), sort_keys=True)
         st.caption(
@@ -298,8 +305,10 @@ def render_captions_controls(source: dict, window, aspect: str, background: str)
         if st.button("Aperçu du style", use_container_width=True):
             with st.spinner("Rendu de l'aperçu…"):
                 try:
+                    highlights = st.session_state.get("highlights")
+                    anchor = float(highlights[0]["start"]) if highlights else (window[0] or 0.0)
                     preview = render_style_preview(
-                        source, window[0] or 0.0, style, aspect, background,
+                        source, anchor, style, aspect, background, quality_key,
                     )
                     st.session_state["style_preview"] = str(preview)
                     st.session_state["style_preview_sig"] = style_sig
@@ -314,25 +323,38 @@ def render_captions_controls(source: dict, window, aspect: str, background: str)
     return style
 
 
-def render_style_preview(source: dict, at: float, style, aspect: str, background: str) -> Path:
+def render_style_preview(
+    source: dict, at: float, style, aspect: str, background: str, quality_key: str,
+) -> Path:
     total = source.get("duration")
-    if total:
-        at = max(0.0, min(at, total - 4.0)) if total > 4.0 else 0.0
     # Le recadrage découpe une tranche verticale : il faut une source assez nette
     # pour ne pas l'agrandir. Le flou / les bandes tolèrent un extrait plus léger.
-    short = _preview_source(source, at, max_height=720 if background == "reframe" else 480)
-    duration = min(4.0, get_video_duration(short))
-    frame_w, frame_h = frame_size(PREVIEW_QUALITY, aspect)
-    # Même modèle que le rendu final pour que le texte de l'aperçu soit fidèle.
-    transcript = transcribe(short, model=DEFAULT_MODEL, cache_dir=session_dir())
-    if not transcript.words:
+    max_h = 720 if background == "reframe" else 480
+    # Cherche un extrait de ~4 s qui contient vraiment de la parole (glisse en avant).
+    short = None
+    transcript = None
+    for step in range(5):
+        probe = at + step * 8.0
+        if total:
+            probe = max(0.0, min(probe, total - 4.0)) if total > 4.0 else 0.0
+        candidate = _preview_source(source, probe, max_height=max_h)
+        found = transcribe(candidate, model=DEFAULT_MODEL, cache_dir=session_dir())
+        if found.words:
+            short, transcript = candidate, found
+            break
+        if total and probe >= total - 4.0:
+            break
+    if transcript is None or not transcript.words:
         raise RuntimeError(
-            "Aucune parole détectée dans cet extrait — impossible de générer des sous-titres."
+            "Aucune parole trouvée près de ce point — choisis une autre portion de la vidéo."
         )
+    duration = min(4.0, get_video_duration(short))
+    frame_w, frame_h = frame_size(PREVIEW_QUALITY, aspect)          # taille réelle de l'aperçu
+    ass_w, ass_h = frame_size(quality_key, aspect)                  # ASS calé sur la réso finale
     ass = write_clip_captions(
         transcript, session_dir() / "preview" / "preview.ass",
         clip_start=0.0, clip_end=duration,
-        width=frame_w, height=frame_h, style=style,
+        width=ass_w, height=ass_h, style=style,
     )
     crop_cmd = None
     if background == "reframe":
@@ -634,7 +656,7 @@ encoding_speed = "fast"
 # apparaissent après la liste des moments (juste avant « Générer »).
 captions_style = None
 if not smart:
-    captions_style = render_captions_controls(source, window, export_format, background)
+    captions_style = render_captions_controls(source, window, export_format, background, quality_key)
 
 # --- Phase 2.5 : choisir les moments (mode intelligent) -----------------------
 clips_windows: list[tuple[float, float]] | None = None
@@ -724,7 +746,7 @@ if smart:
         clips_hints = pick_hints
 
         st.markdown("#### Finalisation")
-        captions_style = render_captions_controls(source, window, export_format, background)
+        captions_style = render_captions_controls(source, window, export_format, background, quality_key)
         subtitle_state = "activés" if captions_style else "désactivés"
         st.caption(f"Sous-titres : **{subtitle_state}** · {len(picks)} clip(s) coché(s).")
         gen_label = f"Générer {len(picks)} clip(s)  ✦"
@@ -759,6 +781,11 @@ with st.expander("Copier les clips dans un dossier (Google Drive…)"):
             f"Vidéos dans `{base}\\clips\\`, titres/description/hashtags dans "
             f"`{base}\\textes\\` (même nom que le clip). "
             "Pointe le dossier vers ton Google Drive synchronisé → tout sur le téléphone."
+        )
+    else:
+        st.caption(
+            "Vide = pas de copie. Les clips restent téléchargeables (individuel / ZIP) "
+            "après génération."
         )
 
 if st.button(gen_label, use_container_width=True, disabled=gen_disabled):

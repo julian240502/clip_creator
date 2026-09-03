@@ -78,6 +78,24 @@ def test_karaoke_mode_emits_kf_and_swaps_primary_colour() -> None:
     assert fields[4] == _ass_colour("#FFFFFF")
 
 
+def test_nudge_emits_a_pos_override_from_the_preset_anchor() -> None:
+    ass = build_ass(
+        _transcript(), clip_start=0.0, clip_end=5.0, width=1080, height=1920,
+        style=CaptionStyle(mode="lines", position="bottom", margin_v=200, nudge_x=30, nudge_y=80),
+    )
+    # x = 1080/2 + 30 ; y = (1920 - 200) - 80
+    assert "\\pos(570,1640)" in ass
+
+
+def test_no_nudge_keeps_alignment_only() -> None:
+    ass = build_ass(
+        _transcript(), clip_start=0.0, clip_end=5.0, width=1080, height=1920,
+        style=CaptionStyle(mode="lines", position="bottom"),
+    )
+    assert "\\pos(" not in ass
+    assert "\\an2" in ass
+
+
 def test_position_top_uses_alignment_8() -> None:
     ass = build_ass(
         _transcript(), clip_start=0.0, clip_end=5.0, width=1080, height=1920,
