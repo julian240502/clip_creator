@@ -121,6 +121,22 @@ python main.py
 
 L'interface s'ouvre normalement sur `http://localhost:8501`.
 
+## Lancement rapide sous Windows
+
+Le dossier `windows/` contient des lanceurs qui évitent de retaper les commandes
+ci-dessus à chaque fois (nécessite que `.venv` existe déjà, voir *Installation*) :
+
+- **`windows/start.bat`** — double-clic pour lancer l'app (fenêtre visible,
+  pratique pour voir les erreurs). Créez-en un raccourci sur le bureau
+  (clic droit → *Créer un raccourci*) ; vous pouvez lui donner une icône
+  personnalisée via les propriétés du raccourci.
+- **`windows/start_silent.vbs`** — identique mais sans fenêtre de console.
+  Pour un lancement automatique à la connexion : appuyez sur `Win+R`, tapez
+  `shell:startup`, puis déposez-y un raccourci vers ce fichier.
+- **`windows/stop.bat`** — arrête le serveur lancé en silencieux (le VBS ne
+  laissant pas de fenêtre à fermer, cherchez et tue le processus sur le port
+  `8501`).
+
 ## Accélération GPU
 
 Au démarrage, l'application teste réellement les encodeurs disponibles et

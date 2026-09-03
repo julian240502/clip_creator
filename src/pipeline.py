@@ -82,9 +82,10 @@ def _make_crop_cmd(track, source_w, source_h, frame_w, frame_h, out_path, *, win
     return write_sendcmd(out_path, path)
 
 
-def _write_metadata_files(exports, windows, transcript, model, hints) -> None:
+def _write_metadata_files(exports, windows, transcript, model, hints, video_title="") -> None:
     from src.metadata import generate_metadata, write_metadata
 
+    video_context = transcript.text
     for index, clip_path in enumerate(exports):
         clip_start, clip_end = windows[index]
         hint_title, hint_summary = hints[index] if hints and index < len(hints) else ("", "")
@@ -92,6 +93,7 @@ def _write_metadata_files(exports, windows, transcript, model, hints) -> None:
             _window_text(transcript, clip_start, clip_end),
             hint_title=hint_title, hint_summary=hint_summary, model=model,
             language=transcript.language,
+            video_title=video_title, video_context=video_context,
         )
         write_metadata(meta, Path(clip_path).with_suffix(".txt"))
 
@@ -112,6 +114,7 @@ def process_video(
     generate_meta: bool = False,
     meta_model: str | None = None,
     clips_hints: list[tuple[str, str]] | None = None,
+    video_title: str | None = None,
     export_dir: str | Path | None = None,
     export_label: str | None = None,
     on_clip: ClipCallback | None = None,
@@ -233,7 +236,9 @@ def process_video(
             notify_clip(clip_path)
         if generate_meta and transcript is not None and transcript.words:
             report(0.96, "Titres & hashtags…")
-            _write_metadata_files(exports, windows, transcript, meta_model, clips_hints)
+            _write_metadata_files(
+                exports, windows, transcript, meta_model, clips_hints, video_title or "",
+            )
         _maybe_publish(exports)
         report(1.0, "Exports terminés")
         return project_dir, exports
@@ -281,7 +286,7 @@ def process_video(
              min(window_start + (k + 1) * clip_length, window_end))
             for k in range(len(exports))
         ]
-        _write_metadata_files(exports, seg_windows, transcript, meta_model, None)
+        _write_metadata_files(exports, seg_windows, transcript, meta_model, None, video_title or "")
     _maybe_publish(exports)
     report(1.0, "Exports terminés")
     return project_dir, exports

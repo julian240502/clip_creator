@@ -795,6 +795,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             generate_meta=meta_on,
             meta_model=meta_model,
             clips_hints=clips_hints,
+            video_title=source.get("title"),
             export_dir=export_dir or None,
             export_label=export_label or None,
             on_clip=on_clip,
