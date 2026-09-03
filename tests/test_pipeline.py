@@ -124,36 +124,22 @@ def test_publish_to_folder_splits_clips_and_texts(tmp_path: Path) -> None:
     assert not (root / "textes" / "clip_002.txt").exists()
 
 
-def test_process_video_copies_exports_into_the_export_folder(
-    sample_video: Path, tmp_path: Path, monkeypatch,
-) -> None:
-    from src import pipeline
+def test_publish_to_folder_copies_only_the_given_subset(tmp_path: Path) -> None:
+    """La copie vers le dossier se fait sur la sélection, plus automatiquement."""
+    from src.pipeline import _publish_to_folder
 
-    monkeypatch.setattr(pipeline, "DATA_DIR", str(tmp_path))
+    src = tmp_path / "vertical"
+    src.mkdir()
+    for name in ("clip_001", "clip_002", "clip_003"):
+        (src / f"{name}.mp4").write_bytes(b"v")
+        (src / f"{name}.txt").write_text("t", encoding="utf-8")
+
     drive = tmp_path / "drive"
-    _project_dir, clips = pipeline.process_video(
-        uploaded_path=sample_video, vertical=True, encoder="cpu",
-        export_quality="720p", encoding_speed="fast",
-        clips_windows=[(0.0, 1.0), (2.0, 3.0)],
-        export_dir=drive, export_label="Cool Streamer",
+    root = _publish_to_folder(
+        [src / "clip_001.mp4", src / "clip_003.mp4"], drive, "Streamer", "20260903-101010",
     )
-    sessions = list((drive / "Cool Streamer").iterdir())
-    assert len(sessions) == 1  # un sous-dossier daté par run
-    copied = sorted(p.name for p in (sessions[0] / "clips").glob("*.mp4"))
-    assert copied == ["clip_001.mp4", "clip_002.mp4"]
-    assert len(copied) == len(clips)
-
-
-def test_process_video_rejects_an_unusable_export_dir(sample_video: Path, tmp_path: Path) -> None:
-    from src import pipeline
-
-    blocker = tmp_path / "not-a-dir"
-    blocker.write_text("x")  # un fichier là où on veut un dossier
-    with pytest.raises(ValueError):
-        pipeline.process_video(
-            uploaded_path=sample_video, vertical=True, encoder="cpu",
-            clips_windows=[(0.0, 1.0)], export_dir=blocker / "sub",
-        )
+    assert sorted(p.name for p in (root / "clips").glob("*.mp4")) == ["clip_001.mp4", "clip_003.mp4"]
+    assert not (root / "clips" / "clip_002.mp4").exists()
 
 
 def test_segment_vertical_cuts_and_reframes_in_one_pass(

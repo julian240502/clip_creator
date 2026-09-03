@@ -115,32 +115,21 @@ def process_video(
     meta_model: str | None = None,
     clips_hints: list[tuple[str, str]] | None = None,
     video_title: str | None = None,
-    export_dir: str | Path | None = None,
-    export_label: str | None = None,
     on_clip: ClipCallback | None = None,
     progress: ProgressCallback | None = None,
 ) -> tuple[Path, list[Path]]:
-    """Exécute le pipeline et renvoie le dossier projet et les exports finaux."""
+    """Exécute le pipeline et renvoie le dossier projet et les exports finaux.
+
+    La copie vers un dossier externe (Google Drive…) se fait ensuite via
+    `_publish_to_folder`, sur la sélection choisie par l'utilisateur.
+    """
     report = progress or (lambda _value, _message: None)
     notify_clip = on_clip or (lambda _path: None)
     if bool(url) == bool(uploaded_path):
         raise ValueError("Fournissez une URL ou un fichier, mais pas les deux.")
-    if export_dir:
-        # Échoue tôt (avant le rendu) si le dossier d'export est inaccessible.
-        try:
-            Path(export_dir).expanduser().mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise ValueError(f"Dossier d'export inaccessible : {exc}") from exc
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     hint = Path(uploaded_path).stem if uploaded_path else "download"
     project_dir = Path(DATA_DIR) / "projects" / f"{stamp}-{_project_name(hint)}"
-    export_session = "-".join(project_dir.name.split("-")[:2])  # AAAAMMJJ-HHMMSS
-
-    def _maybe_publish(items: list[Path]) -> None:
-        if not export_dir:
-            return
-        dest = _publish_to_folder(items, export_dir, export_label or "", export_session)
-        report(0.99, f"Clips copiés vers {dest}")
 
     source_dir = project_dir / "source"
     source_dir.mkdir(parents=True, exist_ok=False)
@@ -197,7 +186,6 @@ def process_video(
                 on_clip=notify_clip,
             )
         ]
-        _maybe_publish(landscape)
         report(1.0, "Exports terminés")
         return project_dir, landscape
     if clips_windows:
@@ -239,7 +227,6 @@ def process_video(
             _write_metadata_files(
                 exports, windows, transcript, meta_model, clips_hints, video_title or "",
             )
-        _maybe_publish(exports)
         report(1.0, "Exports terminés")
         return project_dir, exports
     # Découpage + format vertical en UNE passe : la source n'est décodée qu'une
@@ -287,6 +274,5 @@ def process_video(
             for k in range(len(exports))
         ]
         _write_metadata_files(exports, seg_windows, transcript, meta_model, None, video_title or "")
-    _maybe_publish(exports)
     report(1.0, "Exports terminés")
     return project_dir, exports

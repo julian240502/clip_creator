@@ -131,6 +131,13 @@ def session_dir() -> Path:
     return path
 
 
+def _forget_send_selection() -> None:
+    for key in [k for k in st.session_state if k.startswith("send-clip-")]:
+        st.session_state.pop(key, None)
+    st.session_state.pop("send-all", None)
+    st.session_state.pop("sent_clips", None)
+
+
 def reset_source() -> None:
     for key in (
         "source", "clips", "project_dir", "captions_skipped",
@@ -138,6 +145,7 @@ def reset_source() -> None:
         "highlights", "highlights_model", "export_label",
     ):
         st.session_state.pop(key, None)
+    _forget_send_selection()
     shutil.rmtree(session_dir(), ignore_errors=True)
 
 
@@ -184,9 +192,15 @@ def timecode(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
-def render_clip_card(clip: Path, key: str) -> None:
+def render_clip_card(clip: Path, key: str, *, selectable: bool = False) -> None:
     st.video(str(clip))
     st.caption(clip.name)
+    if selectable:
+        sent = clip.name in st.session_state.get("sent_clips", set())
+        st.checkbox(
+            "Envoyer vers le dossier" + (" · ✓ déjà copié" if sent else ""),
+            key=f"send-{key}",
+        )
     sidecar = clip.with_suffix(".txt")
     if sidecar.is_file():
         with st.expander("Titre & hashtags"):
@@ -514,15 +528,59 @@ if st.session_state.get("clips"):
                 "application/zip", use_container_width=True,
             )
 
+    export_dir = st.session_state.get("export_dir", "").strip()
+    export_label = st.session_state.get("export_label", "").strip()
+
     columns = st.columns(3)
     for index, clip in enumerate(clips):
         with columns[index % 3]:
-            render_clip_card(clip, key=f"clip-{index}")
+            render_clip_card(clip, key=f"clip-{index}", selectable=bool(export_dir))
+
+    if export_dir:
+        n = len(clips)
+        for i in range(n):
+            st.session_state.setdefault(f"send-clip-{i}", False)
+
+        def _toggle_all_send() -> None:
+            for i in range(len(st.session_state.get("clips") or [])):
+                st.session_state[f"send-clip-{i}"] = st.session_state["send-all"]
+
+        picked = [i for i in range(n) if st.session_state.get(f"send-clip-{i}")]
+        st.session_state["send-all"] = len(picked) == n
+        with st.container(border=True):
+            st.checkbox(
+                f"Tout cocher ({len(picked)}/{n})", key="send-all", on_change=_toggle_all_send,
+            )
+            dest_session = "-".join(Path(project_dir).name.split("-")[:2]) if project_dir else "clips"
+            st.caption(
+                f"Destination : `{export_dir}\\{export_label or 'Clips'}\\{dest_session}\\`"
+            )
+            if st.button(
+                f"Envoyer {len(picked)} clip(s) vers le dossier",
+                use_container_width=True, disabled=not picked,
+            ):
+                from src.pipeline import _publish_to_folder
+
+                try:
+                    _publish_to_folder(
+                        [clips[i] for i in picked], export_dir, export_label, dest_session,
+                    )
+                    sent = st.session_state.setdefault("sent_clips", set())
+                    sent.update(clips[i].name for i in picked)
+                    st.success(f"{len(picked)} clip(s) copié(s) dans {export_dir}.")
+                except Exception as exc:  # noqa: BLE001 - message affiché tel quel
+                    st.error(f"Copie impossible : {exc}")
+    else:
+        st.caption(
+            "Renseigne un « Dossier de destination » à l'étape des réglages pour "
+            "pouvoir envoyer une sélection de clips (Google Drive…)."
+        )
 
     left, right = st.columns(2)
     if left.button("Régler à nouveau", use_container_width=True):
         for key in ("clips", "project_dir", "captions_skipped"):
             st.session_state.pop(key, None)
+        _forget_send_selection()
         st.rerun()
     if right.button("Nouvelle vidéo", use_container_width=True):
         reset_source()
@@ -770,7 +828,7 @@ st.session_state.setdefault("export_dir", DEFAULT_EXPORT_DIR)
 st.session_state.setdefault(
     "export_label", (source.get("uploader") or source.get("title") or "").strip(),
 )
-with st.expander("Copier les clips dans un dossier (Google Drive…)"):
+with st.expander("Dossier d'envoi des clips (Google Drive…)"):
     export_dir = st.text_input("Dossier de destination", key="export_dir").strip()
     export_label = st.text_input(
         "Créateur / streamer (nom du sous-dossier)", key="export_label",
@@ -778,14 +836,15 @@ with st.expander("Copier les clips dans un dossier (Google Drive…)"):
     if export_dir:
         base = f"{export_dir}\\{export_label or 'Clips'}\\<date>"
         st.caption(
-            f"Vidéos dans `{base}\\clips\\`, titres/description/hashtags dans "
-            f"`{base}\\textes\\` (même nom que le clip). "
-            "Pointe le dossier vers ton Google Drive synchronisé → tout sur le téléphone."
+            f"Après génération, tu **choisis** les clips à envoyer dans "
+            f"`{base}\\clips\\` (leur `.txt` dans `{base}\\textes\\`). "
+            "Rien n'est copié automatiquement — tu coches ce que tu valides. "
+            "Pointe vers ton Google Drive synchronisé pour retrouver la sélection sur le téléphone."
         )
     else:
         st.caption(
-            "Vide = pas de copie. Les clips restent téléchargeables (individuel / ZIP) "
-            "après génération."
+            "Vide = aucun envoi possible. Les clips restent téléchargeables "
+            "(individuel / ZIP) après génération."
         )
 
 if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
@@ -823,8 +882,6 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             meta_model=meta_model,
             clips_hints=clips_hints,
             video_title=source.get("title"),
-            export_dir=export_dir or None,
-            export_label=export_label or None,
             on_clip=on_clip,
             progress=on_progress,
         )
