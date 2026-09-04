@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 import zipfile
 from dataclasses import asdict, replace
@@ -193,6 +194,25 @@ def timecode(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
+def _read_bytes_resilient(path: Path, attempts: int = 3, delay: float = 0.5) -> bytes | None:
+    """Lit un fichier en tolérant un verrou transitoire (ex. OneDrive/Drive qui
+    synchronise le fichier juste après son écriture). Renvoie None si la lecture
+    échoue après plusieurs essais, plutôt que de faire planter la page."""
+    last_exc: OSError | None = None
+    for _ in range(attempts):
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(delay)
+    st.warning(
+        f"Impossible de lire « {path.name} » — le dossier est probablement "
+        f"synchronisé (OneDrive, Google Drive…) et verrouille encore le fichier. "
+        f"Réessaie dans quelques secondes. ({last_exc})"
+    )
+    return None
+
+
 def render_clip_card(clip: Path, key: str, *, selectable: bool = False) -> None:
     st.video(str(clip))
     st.caption(clip.name)
@@ -206,9 +226,10 @@ def render_clip_card(clip: Path, key: str, *, selectable: bool = False) -> None:
     if sidecar.is_file():
         with st.expander("Titre & hashtags"):
             st.code(sidecar.read_text(encoding="utf-8"), language=None)
-    with clip.open("rb") as handle:
+    data = _read_bytes_resilient(clip)
+    if data is not None:
         st.download_button(
-            "Télécharger", handle, clip.name, "video/mp4",
+            "Télécharger", data, clip.name, "video/mp4",
             key=key, use_container_width=True,
         )
 
@@ -593,16 +614,31 @@ if st.session_state.get("clips"):
     project_dir = st.session_state.get("project_dir")
     if project_dir:
         archive_path = Path(project_dir) / "clip-creator-exports.zip"
-        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
-            for clip in clips:
-                archive.write(clip, clip.name)
-                sidecar = clip.with_suffix(".txt")
-                if sidecar.is_file():
-                    archive.write(sidecar, sidecar.name)
-        with archive_path.open("rb") as archive:
+        zip_data: bytes | None = None
+        last_exc: OSError | None = None
+        for _ in range(3):
+            try:
+                with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
+                    for clip in clips:
+                        archive.write(clip, clip.name)
+                        sidecar = clip.with_suffix(".txt")
+                        if sidecar.is_file():
+                            archive.write(sidecar, sidecar.name)
+                zip_data = archive_path.read_bytes()
+                break
+            except OSError as exc:
+                last_exc = exc
+                time.sleep(0.5)
+        if zip_data is not None:
             st.download_button(
-                "Télécharger tous les clips (.zip)", archive, "clips.zip",
+                "Télécharger tous les clips (.zip)", zip_data, "clips.zip",
                 "application/zip", use_container_width=True,
+            )
+        else:
+            st.warning(
+                "Impossible de préparer l'archive ZIP — le dossier est probablement "
+                f"synchronisé (OneDrive, Google Drive…) et verrouille un fichier. "
+                f"Télécharge les clips un par un en attendant. ({last_exc})"
             )
 
     export_dir = st.session_state.get("export_dir", "").strip()

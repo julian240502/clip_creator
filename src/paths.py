@@ -3,8 +3,10 @@ import os
 # Dossier racine du projet
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Chemin vers le dossier data
-DATA_DIR = os.path.join(BASE_DIR, "data")
+# Chemin vers le dossier data. Redéfinissable via CLIP_CREATOR_DATA_DIR pour le
+# sortir d'un dossier synchronisé (OneDrive, Drive…) qui peut verrouiller des
+# fichiers fraîchement écrits, sans déplacer le dépôt git lui-même.
+DATA_DIR = os.environ.get("CLIP_CREATOR_DATA_DIR") or os.path.join(BASE_DIR, "data")
 
 # Chemin pour les vidéos brutes (raw)
 RAW_VIDEOS_DIR = os.path.join(DATA_DIR, "raw")

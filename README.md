@@ -194,6 +194,20 @@ Autres variables : `CLIP_CREATOR_YTDLP_COOKIES_FILE` (chemin d'un `cookies.txt`
 exporté) et `CLIP_CREATOR_YTDLP_PLAYER_CLIENT` (ex. `android,web`, dépannage).
 Le mode avancé (barre latérale) affiche si des cookies sont configurés.
 
+## Dossier de données hors OneDrive / Drive (recommandé)
+
+Si le dépôt se trouve dans un dossier synchronisé (OneDrive, Google Drive…),
+la synchronisation peut verrouiller un clip ou l'archive ZIP juste après leur
+écriture et faire échouer un téléchargement (`OSError: [Errno 22]`). L'appli
+retente automatiquement puis affiche un message clair si ça persiste, mais le
+plus fiable est de sortir `data/` du dossier synchronisé :
+
+```powershell
+[Environment]::SetEnvironmentVariable("CLIP_CREATOR_DATA_DIR", "C:\ClipCreatorData", "User")
+```
+
+Relancer un nouveau terminal (ou `start.bat`) pour que la variable s'applique.
+
 ## Tests
 
 ```bash
