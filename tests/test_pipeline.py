@@ -115,9 +115,9 @@ def test_publish_to_folder_splits_clips_and_texts(tmp_path: Path) -> None:
 
     drive = tmp_path / "drive"
     root = _publish_to_folder(
-        [src / "clip_001.mp4", src / "clip_002.mp4"], drive, "Cool Streamer", "20260901-120000",
+        [src / "clip_001.mp4", src / "clip_002.mp4"], drive, "fr", "Cool Streamer", "2026-09-01 12h00",
     )
-    assert root == drive / "Cool Streamer" / "20260901-120000"
+    assert root == drive / "FR" / "Cool Streamer" / "2026-09-01 12h00"
     assert (root / "clips" / "clip_001.mp4").is_file()
     assert (root / "clips" / "clip_002.mp4").is_file()
     assert (root / "textes" / "clip_001.txt").is_file()   # même nom que le clip
@@ -136,8 +136,9 @@ def test_publish_to_folder_copies_only_the_given_subset(tmp_path: Path) -> None:
 
     drive = tmp_path / "drive"
     root = _publish_to_folder(
-        [src / "clip_001.mp4", src / "clip_003.mp4"], drive, "Streamer", "20260903-101010",
+        [src / "clip_001.mp4", src / "clip_003.mp4"], drive, "EN", "Streamer", "2026-09-03 10h10",
     )
+    assert root.parent.parent.name == "EN"
     assert sorted(p.name for p in (root / "clips").glob("*.mp4")) == ["clip_001.mp4", "clip_003.mp4"]
     assert not (root / "clips" / "clip_002.mp4").exists()
 

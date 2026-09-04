@@ -27,9 +27,12 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
   (repère les extraits au plus fort potentiel viral, les note et les classe) ;
 - titres, descriptions et hashtags générés par clip (optionnel), dans un `.txt`
   joint à chaque vidéo et à l'archive ZIP — dans la langue de la vidéo ;
-- copie optionnelle des clips (+ leur `.txt`) vers un dossier au choix, rangés dans
-  un sous-dossier au nom du créateur puis par date — pointer vers un dossier Google
-  Drive synchronisé permet de récupérer les clips sur le téléphone.
+- **sous-titres traduits** (optionnel) : garder la langue parlée, ou traduire en
+  français / anglais / chinois via l'IA locale — le texte traduit s'affiche en
+  lignes (pas d'animation mot à mot) ;
+- après génération, **choix des clips** à envoyer vers un dossier au choix, rangés
+  `<dossier>/<LANG>/<créateur>/<date lisible>/{clips,textes}/` — pointer vers un
+  dossier Google Drive synchronisé permet de les récupérer sur le téléphone.
 
 ## Recadrage sur le visage (optionnel)
 
@@ -90,6 +93,15 @@ mode d'apparition (mot actif, karaoké, mot par mot, ligne par ligne), majuscule
 **Aperçu du style** rend un extrait de ~4 s avec les réglages courants avant de lancer tous les clips.
 
 Sur GPU NVIDIA, la transcription utilise CUDA (`float16`) ; sinon elle bascule sur le CPU (`int8`).
+
+### Sous-titres dans une autre langue
+
+Menu **« Langue des sous-titres »** : *Auto* (langue parlée, comportement par défaut)
+ou une cible **FR / EN / ZH**. Si la cible diffère de la langue parlée, la vidéo est
+transcrite normalement puis chaque segment est **traduit par Ollama** (mis en cache).
+Le texte traduit n'a pas de timing mot à mot : les sous-titres passent alors en mode
+**lignes** (une ligne par segment, pas d'effet karaoké / mot actif). En chinois, la
+police *Microsoft YaHei* est imposée pour les glyphes CJK. Nécessite Ollama.
 
 ## Prérequis
 

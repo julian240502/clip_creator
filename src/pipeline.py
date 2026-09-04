@@ -41,16 +41,21 @@ def _safe_folder(name: str) -> str:
 
 
 def _publish_to_folder(
-    exports: list[Path], export_dir: str | Path, label: str, session: str,
+    exports: list[Path], export_dir: str | Path, lang: str, label: str, session: str,
 ) -> Path:
-    """Copie les clips et leurs `.txt` dans `<export_dir>/<créateur>/<session>/`.
+    """Copie les clips et leurs `.txt` dans `<export_dir>/<LANG>/<créateur>/<date>/`.
 
     Deux sous-dossiers parallèles : `clips/` (vidéos) et `textes/` (titre +
     description + hashtags), le `.txt` gardant le nom du clip → on retrouve
     facilement la paire. Pensé pour un dossier Google Drive synchronisé : tout
     se retrouve sur le téléphone, prêt à poster.
     """
-    root = Path(export_dir).expanduser() / _safe_folder(label) / session
+    root = (
+        Path(export_dir).expanduser()
+        / _safe_folder(lang or "XX").upper()
+        / _safe_folder(label)
+        / _safe_folder(session)
+    )
     clips_dir = root / "clips"
     texts_dir = root / "textes"
     clips_dir.mkdir(parents=True, exist_ok=True)
@@ -65,9 +70,15 @@ def _publish_to_folder(
 
 
 def _window_text(transcript, start: float, end: float) -> str:
+    if transcript.words:
+        return " ".join(
+            word.text.strip() for word in transcript.words
+            if word.end > start and word.start < end
+        ).strip()
+    # Transcript traduit (segments sans mots) : on retombe sur les segments.
     return " ".join(
-        word.text.strip() for word in transcript.words
-        if word.end > start and word.start < end
+        seg.text.strip() for seg in transcript.segments
+        if seg.end > start and seg.start < end
     ).strip()
 
 
@@ -111,6 +122,7 @@ def process_video(
     transcribe: bool = False,
     transcribe_model: str = DEFAULT_MODEL,
     captions_style: CaptionStyle | None = None,
+    caption_lang: str | None = None,
     generate_meta: bool = False,
     meta_model: str | None = None,
     clips_hints: list[tuple[str, str]] | None = None,
@@ -166,6 +178,29 @@ def process_video(
             # Aucune parole détectée : on garde les clips mais sans sous-titres.
             report(0.24, "Aucune parole détectée — clips générés sans sous-titres.")
             captions_style = None
+        elif captions_style is not None and caption_lang:
+            from dataclasses import replace as _replace
+
+            from src.captions import CJK_FONT
+            from src.translate import language_supported, translate_transcript
+
+            target = caption_lang.lower()
+            spoken = (transcript.language or "")[:2]
+            if language_supported(target) and target != spoken:
+                model = meta_model
+                if model is None:
+                    from src.llm import ollama_available, pick_model
+
+                    model = pick_model() if ollama_available() else None
+                if model is None:
+                    report(0.24, "Traduction impossible sans IA locale — sous-titres en VO.")
+                else:
+                    report(0.24, f"Traduction des sous-titres → {target}…")
+                    transcript = translate_transcript(transcript, target, model)
+                    # Texte traduit = pas de timing mot à mot -> lignes statiques.
+                    captions_style = _replace(captions_style, mode="lines")
+                    if target == "zh":
+                        captions_style = _replace(captions_style, font=CJK_FONT)
     reframe = vertical and vertical_background == "reframe"
     face_track: list | None = None
     source_dims = (0, 0)

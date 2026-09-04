@@ -27,7 +27,9 @@ __all__ = [
 # --- Options exposées à l'UI --------------------------------------------------
 CAPTION_FONTS = [
     "Arial", "Arial Black", "Impact", "Verdana", "Trebuchet MS", "Tahoma", "Georgia",
+    "Microsoft YaHei", "SimHei",  # chinois (Windows) — glyphes CJK
 ]
+CJK_FONT = "Microsoft YaHei"  # imposée pour des sous-titres chinois
 CAPTION_MODES = {
     "Mot actif": "active",
     "Karaoké": "karaoke",
@@ -133,6 +135,7 @@ class _Line:
     words: list[Word] = field(default_factory=list)
     start: float = 0.0
     end: float = 0.0
+    text: str = ""          # texte prêt (sous-titres traduits, sans timing mot à mot)
 
 
 def _merge_tokens(words: list[Word]) -> list[Word]:
@@ -185,6 +188,23 @@ def _group_lines(words: list[Word], *, max_words: int, max_duration: float, gap:
     return lines
 
 
+def _segment_lines(transcript: Transcript, clip_start: float, clip_end: float) -> list[_Line]:
+    """Une ligne par segment (texte déjà prêt, ex. traduction) — calage au segment."""
+    lines: list[_Line] = []
+    for seg in transcript.segments:
+        if seg.end <= clip_start or seg.start >= clip_end:
+            continue
+        text = seg.text.strip()
+        if not text:
+            continue
+        lines.append(_Line(
+            words=[], text=text,
+            start=max(0.0, seg.start - clip_start),
+            end=min(clip_end, seg.end) - clip_start,
+        ))
+    return lines
+
+
 def _clamp_line_ends(lines: list[_Line], clip_duration: float, hold: float = 0.35) -> None:
     for index, line in enumerate(lines):
         ceiling = lines[index + 1].start - 0.02 if index + 1 < len(lines) else clip_duration
@@ -198,7 +218,10 @@ def _events_lines(lines: list[_Line], style: CaptionStyle, align: int, pos: str 
         tags = f"\\an{align}{pos}"
         if style.fade_ms:
             tags += f"\\fad({style.fade_ms},{style.fade_ms})"
-        body = " ".join(_word_text(word, style) for word in line.words)
+        if line.words:
+            body = " ".join(_word_text(word, style) for word in line.words)
+        else:
+            body = _escape(line.text.upper() if style.uppercase else line.text)
         yield line.start, line.end, f"{{{tags}}}{body}"
 
 
@@ -316,12 +339,18 @@ def build_ass(
     """Construit le contenu d'un fichier .ass pour la fenêtre [clip_start, clip_end]."""
     if style.mode not in _EMITTERS:
         raise ValueError(f"Mode de sous-titres inconnu : {style.mode!r}")
-    words = _clip_words(transcript, clip_start, clip_end)
-    lines = _group_lines(words, max_words=style.max_words, max_duration=style.max_duration)
+    if transcript.words:
+        words = _clip_words(transcript, clip_start, clip_end)
+        lines = _group_lines(words, max_words=style.max_words, max_duration=style.max_duration)
+        emitter = _EMITTERS[style.mode]
+    else:
+        # Pas de timing mot à mot (ex. sous-titres traduits) → lignes par segment.
+        lines = _segment_lines(transcript, clip_start, clip_end)
+        emitter = _events_lines
     _clamp_line_ends(lines, clip_end - clip_start)
     align = _ALIGNMENT.get(style.position, 2)
     pos = _pos_override(width, height, style)
-    events = list(_EMITTERS[style.mode](lines, style, align, pos))
+    events = list(emitter(lines, style, align, pos))
     return _document(width, height, style, events)
 
 

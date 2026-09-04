@@ -18,6 +18,7 @@ from src.captions import (
     CAPTION_FONTS,
     CAPTION_MODES,
     CAPTION_POSITIONS,
+    CJK_FONT,
     TEMPLATES,
     write_clip_captions,
 )
@@ -256,6 +257,30 @@ def _transcript_has_words(project_dir: str) -> bool:
         return False
 
 
+def _friendly_session(project_name: str) -> str:
+    """`20260903-134700-…` → `2026-09-03 13h47` (lisible pour le dossier d'export)."""
+    parts = project_name.split("-")
+    if len(parts) >= 2 and len(parts[0]) == 8 and parts[0].isdigit() and len(parts[1]) >= 4:
+        d, t = parts[0], parts[1]
+        return f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}h{t[2:4]}"
+    return project_name
+
+
+def _export_lang(project_dir: str | None) -> str:
+    """Code langue (majuscules) du dossier d'export : sous-titres choisis, sinon langue parlée."""
+    chosen = st.session_state.get("caption_lang")
+    if chosen:
+        return chosen.upper()
+    if project_dir and (Path(project_dir) / "transcript.json").is_file():
+        try:
+            code = (load_transcript(Path(project_dir) / "transcript.json").language or "")[:2]
+            if code:
+                return code.upper()
+        except Exception:  # noqa: BLE001 - transcript illisible
+            pass
+    return "XX"
+
+
 def render_captions_controls(source: dict, window, aspect: str, background: str, quality_key: str):
     """Toggle + panneau de style des sous-titres. Renvoie le CaptionStyle ou None."""
     ready = transcription_available()
@@ -276,7 +301,19 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
     if not st.session_state.get("model_warming"):
         st.session_state["model_warming"] = True
         threading.Thread(target=prewarm_model, daemon=True).start()
+    caption_langs = {"Auto (langue parlée)": None, "Français": "fr", "English": "en",
+                     "中文 (chinois)": "zh"}
     with st.container(border=True):
+        caption_lang = caption_langs[st.selectbox(
+            "Langue des sous-titres", list(caption_langs), key="caption_lang_label",
+        )]
+        st.session_state["caption_lang"] = caption_lang
+        if caption_lang:
+            st.caption(
+                "Traduit par l'IA locale → sous-titres **en lignes** (l'animation mot à "
+                "mot ne s'applique pas au texte traduit)."
+                + (" Police chinoise imposée." if caption_lang == "zh" else "")
+            )
         base = TEMPLATES[st.selectbox("Style", list(TEMPLATES))]
         col_a, col_b, col_c = st.columns(3)
         font = col_a.selectbox(
@@ -309,6 +346,9 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
             mode=CAPTION_MODES[mode_label], uppercase=uppercase,
             nudge_x=nudge_x, nudge_y=nudge_y,
         )
+        if caption_lang:  # texte traduit : lignes statiques, police CJK si chinois
+            style = replace(style, mode="lines",
+                            font=CJK_FONT if caption_lang == "zh" else style.font)
         style_sig = json.dumps(asdict(style), sort_keys=True)
         st.caption(
             "Le modèle se charge en arrière-plan. Le 1er aperçu prend quelques secondes de plus, "
@@ -322,7 +362,7 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
                     highlights = st.session_state.get("highlights")
                     anchor = float(highlights[0]["start"]) if highlights else (window[0] or 0.0)
                     preview = render_style_preview(
-                        source, anchor, style, aspect, background, quality_key,
+                        source, anchor, style, aspect, background, quality_key, caption_lang,
                     )
                     st.session_state["style_preview"] = str(preview)
                     st.session_state["style_preview_sig"] = style_sig
@@ -339,6 +379,7 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
 
 def render_style_preview(
     source: dict, at: float, style, aspect: str, background: str, quality_key: str,
+    caption_lang: str | None = None,
 ) -> Path:
     total = source.get("duration")
     # Le recadrage découpe une tranche verticale : il faut une source assez nette
@@ -362,6 +403,13 @@ def render_style_preview(
         raise RuntimeError(
             "Aucune parole trouvée près de ce point — choisis une autre portion de la vidéo."
         )
+    if caption_lang and (transcript.language or "")[:2] != caption_lang:
+        from src.translate import translate_transcript
+
+        model = pick_model() if ollama_available() else None
+        if model is None:
+            raise RuntimeError("Traduction impossible : IA locale (Ollama) indisponible.")
+        transcript = translate_transcript(transcript, caption_lang, model)
     duration = min(4.0, get_video_duration(short))
     frame_w, frame_h = frame_size(PREVIEW_QUALITY, aspect)          # taille réelle de l'aperçu
     ass_w, ass_h = frame_size(quality_key, aspect)                  # ASS calé sur la réso finale
@@ -547,13 +595,14 @@ if st.session_state.get("clips"):
 
         picked = [i for i in range(n) if st.session_state.get(f"send-clip-{i}")]
         st.session_state["send-all"] = len(picked) == n
+        lang = _export_lang(project_dir)
+        friendly_date = _friendly_session(Path(project_dir).name) if project_dir else "clips"
         with st.container(border=True):
             st.checkbox(
                 f"Tout cocher ({len(picked)}/{n})", key="send-all", on_change=_toggle_all_send,
             )
-            dest_session = "-".join(Path(project_dir).name.split("-")[:2]) if project_dir else "clips"
             st.caption(
-                f"Destination : `{export_dir}\\{export_label or 'Clips'}\\{dest_session}\\`"
+                f"Destination : `{export_dir}\\{lang}\\{export_label or 'Clips'}\\{friendly_date}\\`"
             )
             if st.button(
                 f"Envoyer {len(picked)} clip(s) vers le dossier",
@@ -563,7 +612,7 @@ if st.session_state.get("clips"):
 
                 try:
                     _publish_to_folder(
-                        [clips[i] for i in picked], export_dir, export_label, dest_session,
+                        [clips[i] for i in picked], export_dir, lang, export_label, friendly_date,
                     )
                     sent = st.session_state.setdefault("sent_clips", set())
                     sent.update(clips[i].name for i in picked)
@@ -878,6 +927,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             source_end=window[1],
             clips_windows=clips_windows,
             captions_style=captions_style,
+            caption_lang=st.session_state.get("caption_lang"),
             generate_meta=meta_on,
             meta_model=meta_model,
             clips_hints=clips_hints,

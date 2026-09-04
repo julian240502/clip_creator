@@ -124,6 +124,26 @@ def test_window_slice_rebases_timestamps() -> None:
     assert "Trop" in ass and "Crispy" not in ass
 
 
+def test_translated_transcript_falls_back_to_segment_lines() -> None:
+    # Segments avec texte mais sans mots (cas d'une traduction) : lignes par segment,
+    # même si le mode demandé est "active" (pas de timing mot à mot dispo).
+    tr = Transcript(
+        language="fr", duration=5.0, model="t",
+        segments=[
+            TranscriptSegment(0.0, 2.0, "Bonjour à tous.", []),
+            TranscriptSegment(2.2, 4.5, "Ceci est un test.", []),
+        ],
+    )
+    ass = build_ass(
+        tr, clip_start=0.0, clip_end=5.0, width=1080, height=1920,
+        style=CaptionStyle(mode="active", uppercase=False),
+    )
+    assert "Bonjour à tous." in ass
+    assert "Ceci est un test." in ass
+    assert ass.count("Dialogue:") == 2          # une ligne par segment, pas par mot
+    assert "\\fscx112" not in ass               # pas d'effet "mot actif"
+
+
 def test_build_ass_with_no_speech_has_no_dialogue() -> None:
     empty = Transcript(language="nn", duration=5.0, model="test", segments=[])
     ass = build_ass(
