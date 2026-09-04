@@ -64,6 +64,8 @@ def _translate_segments(texts: list[str], target: str, model: str) -> list[str]:
         try:
             data = chat_json(system, body, model=model, timeout=150.0)
             translated = data.get("t") or data.get("translations") or data.get("segments") or []
+            if not isinstance(translated, list):
+                continue  # réponse mal formée (ex. un nombre) -> segments gardés en VO
         except Exception:  # noqa: BLE001 - Ollama absent/incohérent -> segment gardé en VO
             continue
         for i in range(len(chunk)):

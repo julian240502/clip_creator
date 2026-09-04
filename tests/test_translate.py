@@ -67,3 +67,13 @@ def test_translate_transcript_noops_without_model_or_same_language() -> None:
     tr = _en_transcript()
     assert translate_transcript(tr, "en", model="llama3") is tr      # déjà anglais
     assert translate_transcript(tr, "fr", model=None) is tr          # pas d'IA locale
+
+
+def test_translate_transcript_ignores_malformed_llm_reply(monkeypatch, tmp_path) -> None:
+    """Régression : Ollama répond parfois {"t": <int>} au lieu d'une liste — ne doit
+    pas planter (`len()` sur un int) mais garder le texte VO pour ce lot."""
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(llm, "chat_json", lambda *a, **k: {"t": 2})
+
+    out = translate_transcript(_en_transcript(), "fr", model="llama3")
+    assert [s.text for s in out.segments] == ["Hello everyone.", "This is a test."]
