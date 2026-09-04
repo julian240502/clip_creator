@@ -143,7 +143,7 @@ def reset_source() -> None:
     for key in (
         "source", "clips", "project_dir", "captions_skipped",
         "style_preview", "style_preview_sig", "preview_at",
-        "highlights", "highlights_model", "export_label",
+        "highlights", "highlights_model", "source_lang", "export_label",
     ):
         st.session_state.pop(key, None)
     _forget_send_selection()
@@ -161,7 +161,7 @@ def _highlight_thumb(media: str, at: float, out: Path) -> str | None:
 
 
 def analyse_highlights(source: dict, quality_key: str, target_count: int,
-                       dur_min: float, dur_max: float) -> tuple[list[dict], str | None]:
+                       dur_min: float, dur_max: float) -> tuple[list[dict], str | None, str]:
     """Télécharge (si URL), transcrit, note les moments et en extrait une vignette."""
     if source["kind"] == "url":
         max_h = get_quality_preset(quality_key).source_max_height
@@ -183,7 +183,7 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         middle = (item.start + item.end) / 2
         data["thumb"] = _highlight_thumb(media, middle, thumbs_dir / f"hl_{index:02d}.jpg")
         items.append(data)
-    return items, model
+    return items, model, transcript.language
 
 
 def timecode(seconds: float) -> str:
@@ -309,12 +309,34 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
         )]
         st.session_state["caption_lang"] = caption_lang
         if caption_lang:
-            _forced_font = font_for_language(caption_lang)
-            st.caption(
-                "Traduit par l'IA locale → sous-titres **en lignes** (l'animation mot à "
-                "mot ne s'applique pas au texte traduit)."
-                + (f" Police `{_forced_font}` imposée." if _forced_font else "")
+            from src.llm import language_name
+
+            source_lang = (st.session_state.get("source_lang") or "")[:2]
+            forced_font = font_for_language(caption_lang)
+            translation_note = (
+                " Les sous-titres passeront alors **en lignes** (l'animation mot à mot "
+                "ne s'applique pas au texte traduit)."
+                + (f" Police `{forced_font}` utilisée pour la traduction." if forced_font else "")
             )
+            if source_lang and source_lang == caption_lang:
+                # Vidéo déjà dans la langue visée : pas de traduction, l'animation
+                # choisie ci-dessous s'applique normalement.
+                st.caption(f"La vidéo est déjà en {language_name(source_lang)} — pas de traduction.")
+            elif source_lang:
+                # Langue source connue (mode intelligent, après « Analyser les moments »)
+                # et différente : la traduction aura lieu à coup sûr.
+                st.caption(
+                    f"La vidéo est en {language_name(source_lang)} → traduite en "
+                    f"{language_name(caption_lang)} par l'IA locale." + translation_note
+                )
+            else:
+                # Langue source inconnue (mode régulier / pas encore analysé) : une
+                # traduction *pourrait* avoir lieu, le rendu décide une fois la vraie
+                # langue connue (à la transcription).
+                st.caption(
+                    "Si la vidéo n'est pas déjà dans cette langue, elle sera traduite "
+                    "par l'IA locale." + translation_note
+                )
         base = TEMPLATES[st.selectbox("Style", list(TEMPLATES))]
         col_a, col_b, col_c = st.columns(3)
         font = col_a.selectbox(
@@ -347,9 +369,9 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
             mode=CAPTION_MODES[mode_label], uppercase=uppercase,
             nudge_x=nudge_x, nudge_y=nudge_y,
         )
-        if caption_lang:  # texte traduit : lignes statiques, police adaptée (CJK/Hangul…)
-            style = replace(style, mode="lines",
-                            font=font_for_language(caption_lang) or style.font)
+        # Le mode "lignes" + la police adaptée ne sont forcés que si une traduction a
+        # réellement lieu (langue source ≠ langue visée) — décidé au rendu, avec la
+        # vraie langue détectée : voir render_style_preview() et process_video().
         style_sig = json.dumps(asdict(style), sort_keys=True)
         st.caption(
             "Le modèle se charge en arrière-plan. Le 1er aperçu prend quelques secondes de plus, "
@@ -404,13 +426,19 @@ def render_style_preview(
         raise RuntimeError(
             "Aucune parole trouvée près de ce point — choisis une autre portion de la vidéo."
         )
-    if caption_lang and (transcript.language or "")[:2] != caption_lang:
+    from src.translate import language_supported
+
+    if caption_lang and language_supported(caption_lang) and (transcript.language or "")[:2] != caption_lang:
         from src.translate import translate_transcript
 
         model = pick_model() if ollama_available() else None
         if model is None:
             raise RuntimeError("Traduction impossible : IA locale (Ollama) indisponible.")
         transcript = translate_transcript(transcript, caption_lang, model)
+        # Texte traduit : glyphes adaptés (CJK/Hangul…) si la police choisie n'en a pas.
+        forced_font = font_for_language(caption_lang)
+        if forced_font:
+            style = replace(style, font=forced_font)
     duration = min(4.0, get_video_duration(short))
     frame_w, frame_h = frame_size(PREVIEW_QUALITY, aspect)          # taille réelle de l'aperçu
     ass_w, ass_h = frame_size(quality_key, aspect)                  # ASS calé sur la réso finale
@@ -745,11 +773,12 @@ else:
     if st.button("Analyser les moments", use_container_width=True):
         with st.spinner("Analyse : téléchargement, transcription, notation…"):
             try:
-                found, used = analyse_highlights(
+                found, used, src_lang = analyse_highlights(
                     source, quality_key, target_count, dur_min, dur_max,
                 )
                 st.session_state["highlights"] = found
                 st.session_state["highlights_model"] = used
+                st.session_state["source_lang"] = src_lang
                 if not found:
                     st.warning("Aucun moment exploitable détecté (pas de parole ?).")
             except Exception as exc:  # noqa: BLE001 - message affiché tel quel

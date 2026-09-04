@@ -174,6 +174,69 @@ def test_pipeline_skips_captions_when_no_speech(
     assert not list(Path(project_dir).rglob("*.ass"))
 
 
+def test_process_video_keeps_word_mode_when_caption_lang_matches_spoken(
+    sample_video: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    """Régression : choisir une langue de sous-titres == langue parlée ne doit PAS
+    forcer le mode en lignes (le bug : l'UI le faisait avant même de savoir si une
+    traduction aurait lieu — voir process_video(), qui seul décide, une fois la
+    vraie langue connue)."""
+    from src import pipeline
+    from src import transcribe as transcribe_mod
+
+    words = [Word(0.0, 0.4, "Bonjour"), Word(0.4, 0.8, "tout"),
+             Word(0.8, 1.2, "le"), Word(1.2, 1.6, "monde")]
+    fake = Transcript(
+        language="fr", duration=3.0, model="x",
+        segments=[TranscriptSegment(0.0, 1.6, "Bonjour tout le monde", words)],
+    )
+    monkeypatch.setattr(transcribe_mod, "transcribe", lambda *a, **k: fake)
+    monkeypatch.setattr(pipeline, "DATA_DIR", str(tmp_path))
+
+    project_dir, clips = pipeline.process_video(
+        uploaded_path=sample_video, clip_length=2, vertical=True, encoder="cpu",
+        export_quality="720p", encoding_speed="fast",
+        captions_style=CaptionStyle(mode="word"), caption_lang="fr",
+    )
+    assert len(clips) >= 1
+    ass_files = list(Path(project_dir).rglob("*.ass"))
+    assert ass_files
+    text = ass_files[0].read_text(encoding="utf-8")
+    assert "\\fscx62" in text            # tag propre au mode "word"
+    assert text.count("Dialogue:") > 1   # un évènement par mot, pas une ligne unique
+
+
+def test_process_video_forces_line_mode_only_when_translating(
+    sample_video: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    from src import llm, pipeline
+    from src import transcribe as transcribe_mod
+    from src import translate as translate_mod
+
+    words = [Word(0.0, 0.4, "Hello"), Word(0.4, 0.8, "world")]
+    fake = Transcript(
+        language="en", duration=3.0, model="x",
+        segments=[TranscriptSegment(0.0, 0.8, "Hello world", words)],
+    )
+    monkeypatch.setattr(transcribe_mod, "transcribe", lambda *a, **k: fake)
+    monkeypatch.setattr(pipeline, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(translate_mod, "TRANSCRIPTIONS_DIR", str(tmp_path / "tr_cache"))
+    monkeypatch.setattr(llm, "chat_json", lambda *a, **k: {"t": ["Bonjour le monde"]})
+
+    project_dir, clips = pipeline.process_video(
+        uploaded_path=sample_video, clip_length=2, vertical=True, encoder="cpu",
+        export_quality="720p", encoding_speed="fast",
+        captions_style=CaptionStyle(mode="word"), caption_lang="fr", meta_model="llama3",
+    )
+    assert len(clips) >= 1
+    ass_files = list(Path(project_dir).rglob("*.ass"))
+    assert ass_files
+    text = ass_files[0].read_text(encoding="utf-8")
+    assert "Bonjour le monde" in text
+    assert "\\fscx62" not in text        # pas d'effet "mot actif" sur le texte traduit
+    assert text.count("Dialogue:") == 1  # une ligne, calée sur le segment
+
+
 def test_segment_vertical_burns_one_ass_across_all_clips(
     sample_video: Path, tmp_path: Path,
 ) -> None:
