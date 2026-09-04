@@ -18,8 +18,8 @@ from src.captions import (
     CAPTION_FONTS,
     CAPTION_MODES,
     CAPTION_POSITIONS,
-    CJK_FONT,
     TEMPLATES,
+    font_for_language,
     write_clip_captions,
 )
 from src.downloader import download_clip, download_source, probe_url
@@ -302,17 +302,18 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
         st.session_state["model_warming"] = True
         threading.Thread(target=prewarm_model, daemon=True).start()
     caption_langs = {"Auto (langue parlée)": None, "Français": "fr", "English": "en",
-                     "中文 (chinois)": "zh"}
+                     "中文 (chinois)": "zh", "한국어 (coréen)": "ko"}
     with st.container(border=True):
         caption_lang = caption_langs[st.selectbox(
             "Langue des sous-titres", list(caption_langs), key="caption_lang_label",
         )]
         st.session_state["caption_lang"] = caption_lang
         if caption_lang:
+            _forced_font = font_for_language(caption_lang)
             st.caption(
                 "Traduit par l'IA locale → sous-titres **en lignes** (l'animation mot à "
                 "mot ne s'applique pas au texte traduit)."
-                + (" Police chinoise imposée." if caption_lang == "zh" else "")
+                + (f" Police `{_forced_font}` imposée." if _forced_font else "")
             )
         base = TEMPLATES[st.selectbox("Style", list(TEMPLATES))]
         col_a, col_b, col_c = st.columns(3)
@@ -346,9 +347,9 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
             mode=CAPTION_MODES[mode_label], uppercase=uppercase,
             nudge_x=nudge_x, nudge_y=nudge_y,
         )
-        if caption_lang:  # texte traduit : lignes statiques, police CJK si chinois
+        if caption_lang:  # texte traduit : lignes statiques, police adaptée (CJK/Hangul…)
             style = replace(style, mode="lines",
-                            font=CJK_FONT if caption_lang == "zh" else style.font)
+                            font=font_for_language(caption_lang) or style.font)
         style_sig = json.dumps(asdict(style), sort_keys=True)
         st.caption(
             "Le modèle se charge en arrière-plan. Le 1er aperçu prend quelques secondes de plus, "

@@ -181,7 +181,7 @@ def process_video(
         elif captions_style is not None and caption_lang:
             from dataclasses import replace as _replace
 
-            from src.captions import CJK_FONT
+            from src.captions import font_for_language
             from src.translate import language_supported, translate_transcript
 
             target = caption_lang.lower()
@@ -199,8 +199,9 @@ def process_video(
                     transcript = translate_transcript(transcript, target, model)
                     # Texte traduit = pas de timing mot à mot -> lignes statiques.
                     captions_style = _replace(captions_style, mode="lines")
-                    if target == "zh":
-                        captions_style = _replace(captions_style, font=CJK_FONT)
+                    lang_font = font_for_language(target)
+                    if lang_font:
+                        captions_style = _replace(captions_style, font=lang_font)
     reframe = vertical and vertical_background == "reframe"
     face_track: list | None = None
     source_dims = (0, 0)

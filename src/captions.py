@@ -27,9 +27,16 @@ __all__ = [
 # --- Options exposées à l'UI --------------------------------------------------
 CAPTION_FONTS = [
     "Arial", "Arial Black", "Impact", "Verdana", "Trebuchet MS", "Tahoma", "Georgia",
-    "Microsoft YaHei", "SimHei",  # chinois (Windows) — glyphes CJK
+    "Microsoft YaHei", "SimHei",       # chinois (Windows)
+    "Malgun Gothic",                   # coréen — Hangul (Windows)
+    "Yu Gothic",                       # japonais (Windows)
 ]
-CJK_FONT = "Microsoft YaHei"  # imposée pour des sous-titres chinois
+# Police imposée par langue de sous-titres pour avoir les bons glyphes.
+LANG_FONT = {"zh": "Microsoft YaHei", "ko": "Malgun Gothic", "ja": "Yu Gothic"}
+
+
+def font_for_language(code: str | None) -> str | None:
+    return LANG_FONT.get((code or "").lower())
 CAPTION_MODES = {
     "Mot actif": "active",
     "Karaoké": "karaoke",
