@@ -28,8 +28,8 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
 - titres, descriptions et hashtags générés par clip (optionnel), dans un `.txt`
   joint à chaque vidéo et à l'archive ZIP — dans la langue de la vidéo ;
 - **sous-titres traduits** (optionnel) : garder la langue parlée, ou traduire en
-  français / anglais / chinois / coréen via l'IA locale — le texte traduit s'affiche en
-  lignes (pas d'animation mot à mot) ;
+  français / anglais / chinois / coréen via l'IA locale — timing synthétique, tous
+  les modes d'apparition (mot actif, karaoké…) restent utilisables ;
 - après génération, **choix des clips** à envoyer vers un dossier au choix, rangés
   `<dossier>/<LANG>/<créateur>/<date lisible>/{clips,textes}/` — pointer vers un
   dossier Google Drive synchronisé permet de les récupérer sur le téléphone.
@@ -99,10 +99,13 @@ Sur GPU NVIDIA, la transcription utilise CUDA (`float16`) ; sinon elle bascule s
 Menu **« Langue des sous-titres »** : *Auto* (langue parlée, comportement par défaut)
 ou une cible **FR / EN / ZH / KO**. Si la cible diffère de la langue parlée, la vidéo
 est transcrite normalement puis chaque segment est **traduit par Ollama** (mis en
-cache). Le texte traduit n'a pas de timing mot à mot : les sous-titres passent alors
-en mode **lignes** (une ligne par segment, pas d'effet karaoké / mot actif). Pour le
-chinois / coréen / japonais, une police à glyphes adaptés est imposée
-(*Microsoft YaHei* / *Malgun Gothic* / *Yu Gothic*, livrées avec Windows). Nécessite Ollama.
+cache). Le texte traduit reçoit un **timing synthétique** (réparti sur la durée du
+segment, proportionnellement à la longueur des mots) : tous les modes d'apparition
+(mot actif, karaoké, mot par mot, lignes) restent utilisables, avec un calage
+approximatif plutôt qu'un vrai alignement audio. Pour le chinois / coréen / japonais,
+une police à glyphes adaptés est imposée (*Microsoft YaHei* / *Malgun Gothic* /
+*Yu Gothic*, livrées avec Windows ; le chinois est découpé caractère par caractère,
+faute d'espaces). Nécessite Ollama.
 
 ## Prérequis
 

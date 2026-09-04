@@ -196,9 +196,9 @@ def process_video(
                     report(0.24, "Traduction impossible sans IA locale — sous-titres en VO.")
                 else:
                     report(0.24, f"Traduction des sous-titres → {target}…")
+                    # Le texte traduit reçoit des timings synthétiques (voir
+                    # src/translate.py) : le mode d'apparition choisi reste utilisable.
                     transcript = translate_transcript(transcript, target, model)
-                    # Texte traduit = pas de timing mot à mot -> lignes statiques.
-                    captions_style = _replace(captions_style, mode="lines")
                     lang_font = font_for_language(target)
                     if lang_font:
                         captions_style = _replace(captions_style, font=lang_font)

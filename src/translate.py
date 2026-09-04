@@ -1,7 +1,11 @@
 """Traduction des segments d'un transcript via Ollama, avec mise en cache.
 
-Sert aux sous-titres dans une autre langue que celle parlée. Le résultat est
-calé au **segment** (pas de timing mot à mot pour le texte traduit).
+Sert aux sous-titres dans une autre langue que celle parlée. Le texte traduit
+n'a pas de vrai alignement mot à mot (impossible à récupérer depuis l'audio
+source, qui est dans une autre langue) : chaque segment traduit reçoit des
+timings **synthétiques**, répartis proportionnellement à la longueur des mots
+sur la durée du segment. Approximatif mais suffisant pour que les modes
+d'apparition (mot actif, karaoké, mot par mot) restent utilisables.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from src.paths import TRANSCRIPTIONS_DIR
-from src.transcribe import Transcript, TranscriptSegment
+from src.transcribe import Transcript, TranscriptSegment, Word
 
 _LANG_NAMES = {
     "fr": "français",
@@ -68,9 +72,36 @@ def _translate_segments(texts: list[str], target: str, model: str) -> list[str]:
     return out
 
 
+def _synthetic_words(text: str, start: float, end: float, target: str) -> list[Word]:
+    """Répartit `text` en « mots » horodatés sur [start, end], proportionnellement
+    à leur longueur. Le chinois n'a pas d'espaces : découpage au caractère.
+    """
+    tokens = [t for t in (list(text) if target == "zh" else text.split()) if t.strip()]
+    if not tokens:
+        return []
+    duration = max(0.05, end - start)
+    weights = [max(1, len(t)) for t in tokens]
+    # Plancher par mot pour éviter un flash trop court, sans dépasser la durée totale.
+    floor = min(0.12, duration / (len(tokens) * 2))
+    remaining = duration - floor * len(tokens)
+    total_weight = sum(weights)
+    words: list[Word] = []
+    cursor = start
+    for token, weight in zip(tokens, weights, strict=True):
+        span = floor + remaining * (weight / total_weight)
+        w_end = min(end, cursor + span)
+        words.append(Word(start=cursor, end=w_end, text=token))
+        cursor = w_end
+    words[-1] = Word(words[-1].start, end, words[-1].text)  # colle pile à la fin du segment
+    return words
+
+
 def _rebuilt(transcript: Transcript, target: str, texts: list[str]) -> Transcript:
     segments = [
-        TranscriptSegment(start=seg.start, end=seg.end, text=text, words=[])
+        TranscriptSegment(
+            start=seg.start, end=seg.end, text=text,
+            words=_synthetic_words(text, seg.start, seg.end, target),
+        )
         for seg, text in zip(transcript.segments, texts, strict=False)
     ]
     return replace(transcript, segments=segments, language=target)
@@ -79,7 +110,7 @@ def _rebuilt(transcript: Transcript, target: str, texts: list[str]) -> Transcrip
 def translate_transcript(
     transcript: Transcript, target: str, model: str | None, *, cache: bool = True,
 ) -> Transcript:
-    """Transcript avec chaque segment traduit en `target` (mots vidés).
+    """Transcript avec chaque segment traduit en `target` (mots synthétiques, voir module).
 
     Renvoie le transcript inchangé si la cible est déjà la langue parlée, si la
     langue n'est pas gérée, ou si aucun modèle Ollama n'est disponible.

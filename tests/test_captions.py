@@ -124,9 +124,11 @@ def test_window_slice_rebases_timestamps() -> None:
     assert "Trop" in ass and "Crispy" not in ass
 
 
-def test_translated_transcript_falls_back_to_segment_lines() -> None:
-    # Segments avec texte mais sans mots (cas d'une traduction) : lignes par segment,
-    # même si le mode demandé est "active" (pas de timing mot à mot dispo).
+def test_transcript_without_word_timings_falls_back_to_segment_lines() -> None:
+    # Filet de sécurité générique de build_ass : un transcript sans mots (quelle
+    # qu'en soit la raison) retombe sur une ligne par segment, même si le mode
+    # demandé est "active" — src/translate.py, lui, fournit des mots synthétiques
+    # et n'emprunte donc plus ce chemin (voir test_translate.py).
     tr = Transcript(
         language="fr", duration=5.0, model="t",
         segments=[
@@ -206,9 +208,11 @@ def test_process_video_keeps_word_mode_when_caption_lang_matches_spoken(
     assert text.count("Dialogue:") > 1   # un évènement par mot, pas une ligne unique
 
 
-def test_process_video_forces_line_mode_only_when_translating(
+def test_process_video_keeps_the_requested_mode_when_translating(
     sample_video: Path, tmp_path: Path, monkeypatch,
 ) -> None:
+    """La traduction reçoit des timings synthétiques (src/translate.py) : le mode
+    d'apparition choisi par l'utilisateur reste utilisable, pas dégradé en lignes."""
     from src import llm, pipeline
     from src import transcribe as transcribe_mod
     from src import translate as translate_mod
@@ -232,9 +236,9 @@ def test_process_video_forces_line_mode_only_when_translating(
     ass_files = list(Path(project_dir).rglob("*.ass"))
     assert ass_files
     text = ass_files[0].read_text(encoding="utf-8")
-    assert "Bonjour le monde" in text
-    assert "\\fscx62" not in text        # pas d'effet "mot actif" sur le texte traduit
-    assert text.count("Dialogue:") == 1  # une ligne, calée sur le segment
+    assert "Bonjour" in text and "le" in text and "monde" in text
+    assert "\\fscx62" in text            # effet "pop" du mode "word" -> bien appliqué
+    assert text.count("Dialogue:") == 3  # un évènement par mot traduit, pas une ligne unique
 
 
 def test_segment_vertical_burns_one_ass_across_all_clips(

@@ -314,8 +314,8 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
             source_lang = (st.session_state.get("source_lang") or "")[:2]
             forced_font = font_for_language(caption_lang)
             translation_note = (
-                " Les sous-titres passeront alors **en lignes** (l'animation mot à mot "
-                "ne s'applique pas au texte traduit)."
+                " Le calage du texte traduit sur les mots est **approximatif** (réparti "
+                "sur la durée de la phrase, pas un vrai alignement audio)."
                 + (f" Police `{forced_font}` utilisée pour la traduction." if forced_font else "")
             )
             if source_lang and source_lang == caption_lang:
