@@ -1,6 +1,6 @@
 from src import llm
 from src.transcribe import Transcript, TranscriptSegment, Word
-from src.translate import _synthetic_words, language_supported, translate_transcript
+from src.translate import language_supported, translate_transcript
 
 
 def _en_transcript() -> Transcript:
@@ -16,29 +16,11 @@ def test_language_supported() -> None:
     assert not language_supported("") and not language_supported("xx")
 
 
-def test_synthetic_words_span_the_segment_and_weight_by_length() -> None:
-    words = _synthetic_words("Bonjour à tous", 10.0, 12.0, "fr")
-    assert [w.text for w in words] == ["Bonjour", "à", "tous"]
-    assert words[0].start == 10.0
-    assert words[-1].end == 12.0                 # colle pile à la fin du segment
-    assert all(w.end > w.start for w in words)    # chaque mot a une durée positive
-    # "à" (1 lettre) doit recevoir moins de temps que "Bonjour" (7 lettres).
-    assert (words[0].end - words[0].start) > (words[1].end - words[1].start)
-
-
-def test_synthetic_words_split_chinese_by_character() -> None:
-    words = _synthetic_words("你好世界", 0.0, 2.0, "zh")
-    assert [w.text for w in words] == list("你好世界")
-    assert words[-1].end == 2.0
-
-
-def test_translate_transcript_replaces_text_and_synthesizes_word_timings(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(
-        "src.paths.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False,
-    )
-    monkeypatch.setattr(
-        "src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False,
-    )
+def test_translate_transcript_replaces_text_as_a_block_per_segment(monkeypatch, tmp_path) -> None:
+    """Sous-titres traduits = un bloc par segment (façon film), pas d'animation mot
+    par mot : impossible d'aligner un vrai minutage sur un texte réécrit dans une
+    autre langue, donc on n'invente pas un timing synthétique."""
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
     calls: list[str] = []
 
     def fake_chat_json(system, user, **_kw):
@@ -50,16 +32,13 @@ def test_translate_transcript_replaces_text_and_synthesizes_word_timings(monkeyp
     out = translate_transcript(_en_transcript(), "fr", model="llama3")
     assert out.language == "fr"
     assert [s.text for s in out.segments] == ["Bonjour à tous.", "Ceci est un test."]
-    assert out.words != []                       # timings synthétiques -> animation utilisable
-    assert out.segments[0].words[0].start == 0.0
-    assert out.segments[0].words[-1].end == 2.0   # calé sur la fin du segment d'origine
+    assert out.words == []  # pas de mots -> build_ass bascule en lignes par segment
     assert "français" in calls[0]
 
     # 2e appel : servi depuis le cache disque, pas de nouvel appel LLM.
     calls.clear()
     again = translate_transcript(_en_transcript(), "fr", model="llama3")
     assert [s.text for s in again.segments] == ["Bonjour à tous.", "Ceci est un test."]
-    assert again.words != []
     assert calls == []
 
 
@@ -71,9 +50,57 @@ def test_translate_transcript_noops_without_model_or_same_language() -> None:
 
 def test_translate_transcript_ignores_malformed_llm_reply(monkeypatch, tmp_path) -> None:
     """Régression : Ollama répond parfois {"t": <int>} au lieu d'une liste — ne doit
-    pas planter (`len()` sur un int) mais garder le texte VO pour ce lot."""
+    pas planter (`len()` sur un int). Avec un seul segment, il n'y a rien à
+    retenter en plus petit : le texte reste en VO."""
     monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(llm, "chat_json", lambda *a, **k: {"t": 2})
 
+    tr = Transcript(
+        language="en", duration=2.0, model="test",
+        segments=[TranscriptSegment(0.0, 2.0, "Hello.", [Word(0.0, 2.0, "Hello.")])],
+    )
+    out = translate_transcript(tr, "fr", model="llama3")
+    assert [s.text for s in out.segments] == ["Hello."]
+
+
+def test_translate_transcript_retries_a_malformed_batch_in_smaller_halves(
+    monkeypatch, tmp_path,
+) -> None:
+    """Un lot de plusieurs segments mal répondu est retenté par moitiés plus
+    petites plutôt qu'abandonné en bloc — un modèle local se trompe plus souvent
+    sur de gros lots que sur un seul segment à la fois."""
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+
+    def fake_chat_json(system, user, **_kw):
+        if len(user.strip().splitlines()) > 1:
+            return {"t": 2}  # lot complet -> réponse mal formée (un nombre, pas une liste)
+        return {"t": [f"Trad[{user.strip()}]"]}
+
+    monkeypatch.setattr(llm, "chat_json", fake_chat_json)
+
     out = translate_transcript(_en_transcript(), "fr", model="llama3")
-    assert [s.text for s in out.segments] == ["Hello everyone.", "This is a test."]
+    assert [s.text for s in out.segments] == [
+        "Trad[[0] Hello everyone.]", "Trad[[0] This is a test.]",
+    ]
+
+
+def test_translate_transcript_only_translates_segments_within_windows(
+    monkeypatch, tmp_path,
+) -> None:
+    """Optimisation perf : ne traduire que les segments qui chevauchent une fenêtre
+    réellement exportée, pas tout le transcript d'une longue vidéo source."""
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+    seen: list[str] = []
+
+    def fake_chat_json(system, user, **_kw):
+        seen.append(user)
+        return {"t": ["Bonjour à tous."]}
+
+    monkeypatch.setattr(llm, "chat_json", fake_chat_json)
+
+    out = translate_transcript(
+        _en_transcript(), "fr", model="llama3", windows=[(0.0, 2.0)],
+    )
+    assert [s.text for s in out.segments] == ["Bonjour à tous.", "This is a test."]
+    assert len(seen) == 1 and "Hello everyone." in seen[0]
+    assert out.segments[1].words != []  # segment hors fenêtre : jamais envoyé, jamais touché

@@ -346,12 +346,13 @@ def build_ass(
     """Construit le contenu d'un fichier .ass pour la fenêtre [clip_start, clip_end]."""
     if style.mode not in _EMITTERS:
         raise ValueError(f"Mode de sous-titres inconnu : {style.mode!r}")
-    if transcript.words:
-        words = _clip_words(transcript, clip_start, clip_end)
+    words = _clip_words(transcript, clip_start, clip_end) if transcript.words else []
+    if words:
         lines = _group_lines(words, max_words=style.max_words, max_duration=style.max_duration)
         emitter = _EMITTERS[style.mode]
     else:
-        # Pas de timing mot à mot (ex. sous-titres traduits) → lignes par segment.
+        # Pas de timing mot à mot dans cette fenêtre (ex. sous-titres traduits,
+        # décidé par fenêtre plutôt que pour tout le transcript) → lignes par segment.
         lines = _segment_lines(transcript, clip_start, clip_end)
         emitter = _events_lines
     _clamp_line_ends(lines, clip_end - clip_start)

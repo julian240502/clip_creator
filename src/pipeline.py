@@ -196,9 +196,12 @@ def process_video(
                     report(0.24, "Traduction impossible sans IA locale — sous-titres en VO.")
                 else:
                     report(0.24, f"Traduction des sous-titres → {target}…")
-                    # Le texte traduit reçoit des timings synthétiques (voir
-                    # src/translate.py) : le mode d'apparition choisi reste utilisable.
-                    transcript = translate_transcript(transcript, target, model)
+                    # On ne traduit que les segments réellement exportés (fenêtres
+                    # de la sélection intelligente, ou la portion découpée en mode
+                    # régulier) : traduire tout le transcript d'une longue vidéo
+                    # pour n'en garder qu'une poignée de clips est inutilement long.
+                    needed = clips_windows or [(window_start, window_end)]
+                    transcript = translate_transcript(transcript, target, model, windows=needed)
                     lang_font = font_for_language(target)
                     if lang_font:
                         captions_style = _replace(captions_style, font=lang_font)

@@ -208,11 +208,11 @@ def test_process_video_keeps_word_mode_when_caption_lang_matches_spoken(
     assert text.count("Dialogue:") > 1   # un évènement par mot, pas une ligne unique
 
 
-def test_process_video_keeps_the_requested_mode_when_translating(
+def test_process_video_renders_translated_captions_as_segment_blocks(
     sample_video: Path, tmp_path: Path, monkeypatch,
 ) -> None:
-    """La traduction reçoit des timings synthétiques (src/translate.py) : le mode
-    d'apparition choisi par l'utilisateur reste utilisable, pas dégradé en lignes."""
+    """La traduction n'a pas de vrai minutage mot à mot : quel que soit le mode
+    d'apparition choisi, un segment traduit s'affiche en bloc (façon film)."""
     from src import llm, pipeline
     from src import transcribe as transcribe_mod
     from src import translate as translate_mod
@@ -236,9 +236,9 @@ def test_process_video_keeps_the_requested_mode_when_translating(
     ass_files = list(Path(project_dir).rglob("*.ass"))
     assert ass_files
     text = ass_files[0].read_text(encoding="utf-8")
-    assert "Bonjour" in text and "le" in text and "monde" in text
-    assert "\\fscx62" in text            # effet "pop" du mode "word" -> bien appliqué
-    assert text.count("Dialogue:") == 3  # un évènement par mot traduit, pas une ligne unique
+    assert "Bonjour le monde" in text
+    assert "\\fscx62" not in text        # pas d'effet "pop" mot par mot sur une traduction
+    assert text.count("Dialogue:") == 1  # un bloc pour tout le segment, pas un par mot
 
 
 def test_segment_vertical_burns_one_ass_across_all_clips(

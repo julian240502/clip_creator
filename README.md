@@ -98,14 +98,15 @@ Sur GPU NVIDIA, la transcription utilise CUDA (`float16`) ; sinon elle bascule s
 
 Menu **« Langue des sous-titres »** : *Auto* (langue parlée, comportement par défaut)
 ou une cible **FR / EN / ZH / KO**. Si la cible diffère de la langue parlée, la vidéo
-est transcrite normalement puis chaque segment est **traduit par Ollama** (mis en
-cache). Le texte traduit reçoit un **timing synthétique** (réparti sur la durée du
-segment, proportionnellement à la longueur des mots) : tous les modes d'apparition
-(mot actif, karaoké, mot par mot, lignes) restent utilisables, avec un calage
-approximatif plutôt qu'un vrai alignement audio. Pour le chinois / coréen / japonais,
-une police à glyphes adaptés est imposée (*Microsoft YaHei* / *Malgun Gothic* /
-*Yu Gothic*, livrées avec Windows ; le chinois est découpé caractère par caractère,
-faute d'espaces). Nécessite Ollama.
+est transcrite normalement puis les segments réellement exportés sont **traduits par
+Ollama** (mis en cache) — pas tout le transcript d'une longue vidéo source si seule
+une poignée de clips en est extraite, pour rester rapide. Un segment traduit n'a pas
+de vrai alignement mot à mot (impossible à récupérer depuis l'audio, qui est dans une
+autre langue) : il s'affiche donc **en bloc, comme des sous-titres de film**, quel que
+soit le mode d'apparition choisi pour le reste de la vidéo. Un lot de segments mal
+traduit par le modèle est retenté par plus petits lots avant d'abandonner en VO. Pour
+le chinois / coréen / japonais, une police à glyphes adaptés est imposée (*Microsoft
+YaHei* / *Malgun Gothic* / *Yu Gothic*, livrées avec Windows). Nécessite Ollama.
 
 ## Prérequis
 
