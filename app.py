@@ -835,7 +835,7 @@ else:
         window = st.select_slider(
             "Portion à analyser", options=opts, value=(opts[0], opts[-1]), format_func=timecode,
         )
-        if window[0] > 0.0 or window[1] < float(duration):
+        if window[0] > opts[0] or window[1] < opts[-1]:
             smart_window = (float(window[0]), float(window[1]))
             st.caption(
                 f"Analyse cadrée sur {timecode(window[0])} – {timecode(window[1])} "
