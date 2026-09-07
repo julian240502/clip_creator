@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from src.encoder import (
@@ -17,7 +18,53 @@ from src.reframe import crop_box
 from src.video_splitter import get_video_resolution
 
 ClipCallback = Callable[[Path], None]
-BACKGROUNDS = {"blur", "black", "reframe"}
+BACKGROUNDS = {"blur", "black", "reframe", "split"}
+
+
+@dataclass(frozen=True)
+class SplitLayout:
+    """Écran vertical coupé en deux : `top` = facecam, `bottom` = gameplay.
+
+    `top` / `bottom` : rectangles **en fractions** (fx, fy, fw, fh) de la source,
+    chacune dans [0, 1]. Indépendant de la résolution → marche pour l'aperçu
+    720p comme pour le rendu final. `bottom` par défaut = toute l'image, donc un
+    recadrage gameplay centré une fois mis à l'échelle du panneau bas.
+    `top_frac` : part verticale (0-1) du panneau haut (facecam) dans le clip final.
+    """
+
+    top: tuple[float, float, float, float]
+    bottom: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
+    top_frac: float = 0.40
+
+
+def _even(value: float) -> int:
+    number = int(round(value))
+    return number - (number % 2)
+
+
+def _split_layout_filter(width: int, height: int, layout: SplitLayout) -> str:
+    frac = min(0.85, max(0.15, layout.top_frac))
+    top_h = max(2, _even(height * frac))
+    bot_h = height - top_h
+
+    def _panel(src: str, out: str, rect: tuple[float, float, float, float], panel_h: int) -> str:
+        fx, fy, fw, fh = (max(0.0, min(1.0, float(v))) for v in rect)
+        fw = min(fw, 1.0 - fx) or 0.05
+        fh = min(fh, 1.0 - fy) or 0.05
+        # `crop` évalué en fractions de iw/ih ; `increase` + `crop` = on remplit
+        # le panneau, l'excédent est rogné (pas de bandes, pas de déformation).
+        return (
+            f"[{src}]crop=iw*{fw:.5f}:ih*{fh:.5f}:iw*{fx:.5f}:ih*{fy:.5f},"
+            f"scale={width}:{panel_h}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{panel_h},setsar=1[{out}]"
+        )
+
+    return (
+        "[0:v]split=2[sp_top][sp_bot];"
+        + _panel("sp_top", "pane_top", layout.top, top_h) + ";"
+        + _panel("sp_bot", "pane_bot", layout.bottom, bot_h) + ";"
+        "[pane_top][pane_bot]vstack,format=yuv420p[vout]"
+    )
 
 
 def _cuda_blur_enabled() -> bool:
@@ -116,20 +163,23 @@ def resize_clip_for_vertical(
     duration: float | None = None,
     captions_file: str | Path | None = None,
     crop_cmd_file: str | Path | None = None,
+    split_layout: SplitLayout | None = None,
 ) -> Path:
-    """Recadre la vidéo source dans le cadre au ratio choisi (fond flou / bandes / visage)."""
+    """Recadre la vidéo source dans le cadre au ratio choisi (flou / bandes / visage / réaction)."""
     # FFmpeg tourne depuis le dossier de sortie : le chemin source doit être absolu.
     source, destination = Path(input_path).resolve(), Path(output_path)
     if not source.is_file():
         raise FileNotFoundError(f"Vidéo introuvable : {source}")
     if background not in BACKGROUNDS:
-        raise ValueError("Le fond doit être 'blur', 'black' ou 'reframe'.")
+        raise ValueError("Le fond doit être 'blur', 'black', 'reframe' ou 'split'.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     run_dir = destination.parent
     captions_name = _prepare_sidecar(captions_file, run_dir) if captions_file is not None else None
     crop_name = _prepare_sidecar(crop_cmd_file, run_dir) if crop_cmd_file is not None else None
     if background == "reframe" and crop_name is None:
         raise ValueError("Le recadrage visage exige un script sendcmd.")
+    if background == "split" and split_layout is None:
+        raise ValueError("La disposition réaction exige un SplitLayout.")
     width, height = frame_size(quality, aspect)
     if start is not None and start < 0:
         raise ValueError("Le début du clip ne peut pas être négatif.")
@@ -158,6 +208,13 @@ def resize_clip_for_vertical(
             command.extend([
                 "-filter_complex", video_filter,
                 "-map", "[vout]", "-map", "0:a?",
+            ])
+        elif background == "split":
+            video_filter = _split_layout_filter(width, height, split_layout)
+            if captions_name:
+                video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
+            command.extend([
+                "-filter_complex", video_filter, "-map", "[vout]", "-map", "0:a?",
             ])
         elif background == "reframe":
             video_filter = _reframe_filter(source, width, height, crop_name)
@@ -210,6 +267,7 @@ def segment_vertical(
     background: str = "blur",
     captions_file: str | Path | None = None,
     crop_cmd_file: str | Path | None = None,
+    split_layout: SplitLayout | None = None,
     on_clip: ClipCallback | None = None,
 ) -> list[Path]:
     """Découpe + reformat en une seule passe FFmpeg (segment muxer).
@@ -221,7 +279,9 @@ def segment_vertical(
     if not source.is_file():
         raise FileNotFoundError(f"Vidéo introuvable : {source}")
     if background not in BACKGROUNDS:
-        raise ValueError("Le fond doit être 'blur', 'black' ou 'reframe'.")
+        raise ValueError("Le fond doit être 'blur', 'black', 'reframe' ou 'split'.")
+    if background == "split" and split_layout is None:
+        raise ValueError("La disposition réaction exige un SplitLayout.")
     span = window_end - window_start
     if span <= 0:
         raise ValueError("La fenêtre sélectionnée est vide.")
@@ -249,6 +309,11 @@ def segment_vertical(
                    "-ss", str(window_start), "-i", str(source), "-t", str(span)]
         if background == "blur":
             video_filter = _blur_background_filter(width, height, cuda=cuda)
+            if captions_name:
+                video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
+            command += ["-filter_complex", video_filter, "-map", "[vout]", "-map", "0:a?"]
+        elif background == "split":
+            video_filter = _split_layout_filter(width, height, split_layout)
             if captions_name:
                 video_filter = video_filter.replace("[vout]", f",ass={captions_name}[vout]")
             command += ["-filter_complex", video_filter, "-map", "[vout]", "-map", "0:a?"]

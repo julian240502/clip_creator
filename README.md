@@ -13,8 +13,9 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
 - découpage précis avec une durée configurable ;
 - choix du format d'export : 9:16, 4:5, 1:1, 16:9 ou format d'origine, en 720p / 1080p / 4K ;
 - la vidéo source tient entièrement dans le cadre, sans déformation ;
-- arrière-plan : vidéo floutée, bandes noires, ou **recadrage qui suit le visage**
-  (podcasts / interviews — optionnel, voir plus bas) ;
+- arrière-plan : vidéo floutée, bandes noires, **recadrage qui suit le visage**
+  (podcasts / interviews), ou **disposition réaction haut / bas** (facecam du
+  streamer en haut, gameplay centré en bas — voir plus bas) ;
 - accélération matérielle automatique NVIDIA NVENC, Intel Quick Sync ou AMD AMF ;
 - redimensionnement CUDA sur NVIDIA pour le recadrage vertical ;
 - profils d'encodage rapide, équilibré ou qualité maximale ;
@@ -50,6 +51,19 @@ rééchantillonne et **lisse** la trajectoire (fenêtre glissante ~1,2 s + limit
 puis pilote le filtre `crop` via une **expression `x(t)` continue** (évaluée à chaque image,
 pas de saccades). Sans OpenCV, ou si aucun visage n'est détecté, on retombe sur un
 recadrage centré.
+
+## Disposition réaction haut / bas (optionnel)
+
+Pour les clips de streamers qui réagissent à du contenu : l'arrière-plan
+« Réaction haut / bas » découpe **deux zones dans la même vidéo source** et les
+empile — **facecam** en haut, **gameplay** en bas. Sur une image de repère de la
+vidéo, on place le cadre du facecam (position X/Y et taille en % de la source) ;
+le gameplay est ensuite **recadré et centré automatiquement** pour remplir le
+panneau du bas, sans déformation ni bandes. Réglages : cadre du facecam et
+**part verticale** du panneau haut dans le clip (40 % par défaut). Un bouton
+*Aperçu de la disposition* rend ~3 s pour vérifier le cadrage ; l'aperçu de style
+des sous-titres montre aussi le split. Recadrage **statique** (pas de suivi) —
+pensé pour un facecam fixe dans un coin.
 
 ## Sélection intelligente (optionnel)
 

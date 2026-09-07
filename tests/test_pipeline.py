@@ -13,8 +13,10 @@ from src.encoder import (
     video_encoder_args,
 )
 from src.resizer import (
+    SplitLayout,
     _black_background_filter,
     _blur_background_filter,
+    _split_layout_filter,
     resize_clip_for_vertical,
     segment_vertical,
 )
@@ -234,6 +236,41 @@ def test_invalid_background_is_rejected(sample_video: Path, tmp_path: Path) -> N
             sample_video, tmp_path / "invalid.mp4",
             encoder="cpu", background="transparent",
         )
+
+
+def test_split_layout_filter_stacks_two_cropped_panels() -> None:
+    layout = SplitLayout(top=(0.30, 0.05, 0.35, 0.45), bottom=(0.0, 0.0, 1.0, 1.0), top_frac=0.40)
+    f = _split_layout_filter(1080, 1920, layout)
+    assert f.count("crop=") == 4          # 2 crops source (fractions) + 2 recadrages panneau
+    assert "crop=iw*" in f and "ih*" in f  # fractions -> indépendant de la résolution
+    assert "vstack" in f and f.endswith("[vout]")
+    assert "scale=1080:768" in f          # panneau haut : _even(1920*0.40)
+    assert "scale=1080:1152" in f         # panneau bas : 1920 - 768
+
+
+def test_split_background_needs_a_layout(sample_video: Path, tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        resize_clip_for_vertical(
+            sample_video, tmp_path / "split.mp4",
+            encoder="cpu", background="split", start=0.0, duration=1.0,
+        )
+
+
+def test_process_video_split_layout_renders_vertical(
+    sample_video: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    from src import pipeline
+
+    monkeypatch.setattr(pipeline, "DATA_DIR", str(tmp_path))
+    layout = SplitLayout(top=(0.0, 0.0, 1.0, 0.5), top_frac=0.5)
+    _project_dir, clips = pipeline.process_video(
+        uploaded_path=sample_video, vertical=True, encoder="cpu",
+        export_quality="720p", encoding_speed="fast",
+        vertical_background="split", split_layout=layout,
+        clips_windows=[(0.0, 1.0), (2.0, 3.0)],
+    )
+    assert len(clips) == 2
+    assert get_video_resolution(clips[0]) == (720, 1280)
 
 
 def test_url_validation() -> None:

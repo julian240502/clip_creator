@@ -12,7 +12,7 @@ from src.downloader import download_source
 from src.encoder import encoder_label, resolve_video_encoder
 from src.paths import DATA_DIR, SOURCE_CACHE_DIR
 from src.quality import frame_size, get_quality_preset
-from src.resizer import resize_clip_for_vertical, segment_vertical
+from src.resizer import SplitLayout, resize_clip_for_vertical, segment_vertical
 from src.transcribe import DEFAULT_MODEL
 from src.video_splitter import (
     get_video_duration,
@@ -116,6 +116,7 @@ def process_video(
     encoder: str = "auto", export_quality: str = "1080p",
     encoding_speed: str = "balanced",
     vertical_background: str = "blur",
+    split_layout: SplitLayout | None = None,
     source_start: float | None = None,
     source_end: float | None = None,
     clips_windows: list[tuple[float, float]] | None = None,
@@ -258,6 +259,7 @@ def process_video(
                 quality=quality.key, aspect=export_format, background=vertical_background,
                 start=clip_start, duration=clip_end - clip_start,
                 captions_file=clip_captions, crop_cmd_file=crop_cmd,
+                split_layout=split_layout,
             )
             exports.append(clip_path)
             notify_clip(clip_path)
@@ -303,7 +305,7 @@ def process_video(
         clip_length=clip_length, window_start=window_start, window_end=window_end,
         encoder=encoder, encoding_speed=encoding_speed, quality=quality.key,
         aspect=export_format, background=vertical_background, captions_file=captions_file,
-        crop_cmd_file=crop_cmd, on_clip=_on_segment,
+        crop_cmd_file=crop_cmd, split_layout=split_layout, on_clip=_on_segment,
     )
     if generate_meta and transcript is not None and transcript.words:
         report(0.96, "Titres & hashtags…")

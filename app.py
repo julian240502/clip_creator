@@ -31,7 +31,7 @@ from src.paths import SOURCE_CACHE_DIR
 from src.pipeline import process_video
 from src.quality import ASPECT_USAGE, frame_size, get_quality_preset
 from src.reframe import reframe_available
-from src.resizer import resize_clip_for_vertical
+from src.resizer import SplitLayout, resize_clip_for_vertical
 from src.transcribe import (
     DEFAULT_MODEL,
     load_transcript,
@@ -97,6 +97,7 @@ BACKGROUND_CHOICES = {
     "Fond vidéo flouté — recommandé": "blur",
     "Bandes noires": "black",
     "Recadrage sur le visage (podcast / interview)": "reframe",
+    "Réaction haut / bas (facecam + gameplay)": "split",
 }
 FORMAT_CHOICES = {
     "9:16 · Vertical": "9:16",
@@ -143,7 +144,7 @@ def _forget_send_selection() -> None:
 def reset_source() -> None:
     for key in (
         "source", "clips", "project_dir", "captions_skipped",
-        "style_preview", "style_preview_sig", "preview_at",
+        "style_preview", "style_preview_sig", "preview_at", "split_preview",
         "highlights", "highlights_model", "source_lang", "export_label",
     ):
         st.session_state.pop(key, None)
@@ -321,7 +322,10 @@ def _export_lang(project_dir: str | None) -> str:
     return "XX"
 
 
-def render_captions_controls(source: dict, window, aspect: str, background: str, quality_key: str):
+def render_captions_controls(
+    source: dict, window, aspect: str, background: str, quality_key: str,
+    split_layout: SplitLayout | None = None,
+):
     """Toggle + panneau de style des sous-titres. Renvoie le CaptionStyle ou None."""
     ready = transcription_available()
     reframed = aspect != "source"
@@ -419,6 +423,8 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
         )
         if background == "reframe":
             st.caption("L'aperçu utilise un recadrage centré ; le rendu final suivra le visage.")
+        if background == "split" and split_layout is None:
+            st.caption("Règle d'abord la disposition réaction plus haut pour voir l'aperçu.")
         if st.button("Aperçu du style", use_container_width=True):
             with st.spinner("Rendu de l'aperçu…"):
                 try:
@@ -426,6 +432,7 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
                     anchor = float(highlights[0]["start"]) if highlights else (window[0] or 0.0)
                     preview = render_style_preview(
                         source, anchor, style, aspect, background, quality_key, caption_lang,
+                        split_layout,
                     )
                     st.session_state["style_preview"] = str(preview)
                     st.session_state["style_preview_sig"] = style_sig
@@ -442,12 +449,12 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
 
 def render_style_preview(
     source: dict, at: float, style, aspect: str, background: str, quality_key: str,
-    caption_lang: str | None = None,
+    caption_lang: str | None = None, split_layout: SplitLayout | None = None,
 ) -> Path:
     total = source.get("duration")
-    # Le recadrage découpe une tranche verticale : il faut une source assez nette
-    # pour ne pas l'agrandir. Le flou / les bandes tolèrent un extrait plus léger.
-    max_h = 720 if background == "reframe" else 480
+    # Recadrage / réaction découpent la source : il faut un extrait assez net pour
+    # ne pas l'agrandir. Le flou / les bandes tolèrent un extrait plus léger.
+    max_h = 720 if background in ("reframe", "split") else 480
     # Cherche un extrait de ~4 s qui contient vraiment de la parole (glisse en avant).
     short = None
     transcript = None
@@ -503,9 +510,108 @@ def render_style_preview(
     resize_clip_for_vertical(
         short, output, quality=PREVIEW_QUALITY, aspect=aspect, background=background,
         start=0.0, duration=duration, encoding_speed="fast", captions_file=ass,
-        crop_cmd_file=crop_cmd,
+        crop_cmd_file=crop_cmd, split_layout=split_layout,
     )
     return output
+
+
+def _grab_frame(source: dict, at: float) -> Path | None:
+    """Une image fixe (JPEG) de la source, servant de repère au cadrage réaction."""
+    local = source.get("path")
+    if local and Path(str(local)).is_file():
+        media, seek = str(local), max(at, 0.0)
+    else:
+        try:
+            media, seek = str(_preview_source(source, at, seconds=1.0, max_height=720)), 0.3
+        except Exception:  # noqa: BLE001 - source distante indisponible
+            return None
+    out = session_dir() / "preview" / "split_frame.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    done = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(seek),
+         "-i", media, "-frames:v", "1", "-q:v", "3", str(out)],
+        capture_output=True,
+    )
+    return out if done.returncode == 0 and out.is_file() else None
+
+
+def _draw_box_on_frame(frame: Path, box: tuple[float, float, float, float]):
+    """Image repère avec le rectangle facecam dessiné (le reste part en gameplay)."""
+    from PIL import Image, ImageDraw
+
+    img = Image.open(frame).convert("RGB")
+    w, h = img.size
+    fx, fy, fw, fh = box
+    draw = ImageDraw.Draw(img)
+    draw.rectangle(
+        [fx * w, fy * h, (fx + fw) * w, (fy + fh) * h],
+        outline=(255, 90, 95), width=max(3, w // 240),
+    )
+    return img
+
+
+def render_split_preview(source: dict, at: float, aspect: str, layout: SplitLayout) -> Path:
+    """Aperçu court (~3 s, sans sous-titres) de la disposition réaction haut/bas."""
+    total = source.get("duration")
+    if total and total > 3.0:
+        at = max(0.0, min(at, total - 3.0))
+    short = _preview_source(source, at, seconds=3.0, max_height=720)
+    duration = min(3.0, get_video_duration(short))
+    output = session_dir() / "preview" / "split.mp4"
+    resize_clip_for_vertical(
+        short, output, quality=PREVIEW_QUALITY, aspect=aspect, background="split",
+        start=0.0, duration=duration, encoding_speed="fast", split_layout=layout,
+    )
+    return output
+
+
+def render_split_controls(source: dict, aspect: str) -> SplitLayout | None:
+    """Cadrage du facecam (position/taille en % de la source) + gameplay centré dessous."""
+    with st.container(border=True):
+        st.caption(
+            "Place le cadre sur le **visage / la webcam du streamer**. Le **gameplay** "
+            "est recadré et centré automatiquement dans le panneau du bas."
+        )
+        hl = st.session_state.get("highlights")
+        total = source.get("duration") or 0.0
+        at = float(hl[0]["start"]) if hl else round(total * 0.3, 1)
+        frame = _grab_frame(source, at)
+        if frame is None:
+            st.error("Impossible d'extraire une image de référence de la vidéo.")
+            return None
+
+        c1, c2 = st.columns(2)
+        fx = c1.slider("Position X", 0, 95, 0, 1, format="%d %%", key="split_fx") / 100
+        fy = c2.slider("Position Y", 0, 95, 0, 1, format="%d %%", key="split_fy") / 100
+        c3, c4 = st.columns(2)
+        fw = c3.slider("Largeur", 10, 100, 40, 1, format="%d %%", key="split_fw") / 100
+        fh = c4.slider("Hauteur", 10, 100, 45, 1, format="%d %%", key="split_fh") / 100
+        fw = min(fw, 1.0 - fx)
+        fh = min(fh, 1.0 - fy)
+        top_frac = st.slider(
+            "Hauteur du facecam dans le clip", 25, 60, 40, 5, format="%d %%",
+            key="split_top_frac",
+        ) / 100
+
+        st.image(
+            _draw_box_on_frame(frame, (fx, fy, fw, fh)),
+            caption="Rouge = facecam (panneau du haut). Le reste de l'image → gameplay centré.",
+            use_container_width=True,
+        )
+        layout = SplitLayout(top=(fx, fy, fw, fh), top_frac=top_frac)
+
+        if st.button("Aperçu de la disposition", use_container_width=True, key="split_preview_btn"):
+            with st.spinner("Rendu de l'aperçu…"):
+                try:
+                    out = render_split_preview(source, at, aspect, layout)
+                    st.session_state["split_preview"] = str(out)
+                except Exception as exc:  # noqa: BLE001 - message affiché tel quel
+                    st.session_state.pop("split_preview", None)
+                    st.error(f"Aperçu impossible : {exc}")
+        prev = st.session_state.get("split_preview")
+        if prev and Path(prev).is_file():
+            st.columns([1, 2, 1])[1].video(prev)
+    return layout
 
 
 def render_diagnostics() -> None:
@@ -762,6 +868,7 @@ export_format = FORMAT_CHOICES[format_label]
 vertical = export_format != "source"
 
 background = "blur"
+split_layout: SplitLayout | None = None
 if vertical:
     frame_w, frame_h = frame_size(quality_key, export_format)
     st.markdown(
@@ -783,6 +890,8 @@ if vertical:
                 "Recadrage visage indisponible : `pip install -r requirements-reframe.txt`. "
                 "En attendant, un recadrage centré sera appliqué."
             )
+    elif background == "split":
+        split_layout = render_split_controls(source, export_format)
 
 smart = st.radio(
     "Découpage", ["Régulier", "Sélection intelligente"], horizontal=True,
@@ -869,7 +978,9 @@ encoding_speed = "fast"
 # apparaissent après la liste des moments (juste avant « Générer »).
 captions_style = None
 if not smart:
-    captions_style = render_captions_controls(source, window, export_format, background, quality_key)
+    captions_style = render_captions_controls(
+        source, window, export_format, background, quality_key, split_layout,
+    )
 
 # --- Phase 2.5 : choisir les moments (mode intelligent) -----------------------
 clips_windows: list[tuple[float, float]] | None = None
@@ -959,7 +1070,9 @@ if smart:
         clips_hints = pick_hints
 
         st.markdown("#### Finalisation")
-        captions_style = render_captions_controls(source, window, export_format, background, quality_key)
+        captions_style = render_captions_controls(
+        source, window, export_format, background, quality_key, split_layout,
+    )
         subtitle_state = "activés" if captions_style else "désactivés"
         st.caption(f"Sous-titres : **{subtitle_state}** · {len(picks)} clip(s) coché(s).")
         gen_label = f"Générer {len(picks)} clip(s)  ✦"
@@ -1002,6 +1115,10 @@ with st.expander("Dossier d'envoi des clips (Google Drive…)"):
             "(individuel / ZIP) après génération."
         )
 
+if background == "split" and split_layout is None:
+    gen_disabled = True
+    st.caption("Trace le cadre du facecam (disposition réaction) pour pouvoir générer.")
+
 if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
     progress_bar = st.progress(0.0)
     status = st.empty()
@@ -1029,6 +1146,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             export_quality=quality_key,
             encoding_speed=encoding_speed,
             vertical_background=background,
+            split_layout=split_layout,
             source_start=window[0],
             source_end=window[1],
             clips_windows=clips_windows,
