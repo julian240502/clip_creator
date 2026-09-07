@@ -209,6 +209,27 @@ def test_find_highlights_heuristic_only_is_sorted_and_bounded() -> None:
         assert h.end > h.start
 
 
+def test_find_highlights_source_window_keeps_extracts_inside_the_range() -> None:
+    """Rediff de live : cadrer l'analyse sur une portion écarte tout extrait qui
+    déborde des intros / pauses hors de cette portion."""
+    full = find_highlights(_transcript(), target_count=8, min_duration=18.0, max_duration=45.0)
+    assert any(h.start < 20.0 for h in full)  # sans fenêtre, des extraits démarrent tôt
+
+    windowed = find_highlights(
+        _transcript(), target_count=8, min_duration=18.0, max_duration=45.0,
+        source_window=(20.0, 68.0),
+    )
+    assert windowed
+    for h in windowed:
+        assert h.start >= 20.0 - 0.01 and h.end <= 68.0 + 0.01
+
+
+def test_find_highlights_source_window_too_tight_returns_nothing() -> None:
+    assert find_highlights(
+        _transcript(), min_duration=18.0, max_duration=45.0, source_window=(10.0, 15.0),
+    ) == []
+
+
 _RAW = (
     "mal du coup avec du recul tu en as quels souvenirs mais franchement "
     "c'est quand même une belle période parce que quand tu as 15 ans tu te dis"

@@ -408,8 +408,14 @@ def find_highlights(
     max_duration: float = 75.0,
     model: str | None = None,
     progress: ProgressCallback | None = None,
+    source_window: tuple[float, float] | None = None,
 ) -> list[Highlight]:
-    """Renvoie les meilleurs extraits, classés par score décroissant."""
+    """Renvoie les meilleurs extraits, classés par score décroissant.
+
+    `source_window` restreint les extraits candidats à `(start, end)` de la source
+    — pratique pour une rediff de live : on cadre sur la partie active et on
+    ignore les intros, pauses et écrans « je reviens ».
+    """
     report = progress or (lambda _value, _message: None)
     language = transcript.language  # titres / résumés / hook dans la langue de la vidéo
     units = _sentence_units(transcript)
@@ -418,6 +424,11 @@ def find_highlights(
 
     report(0.1, "Repérage des phrases…")
     raw = _candidate_windows(units, min_dur=min_duration, max_dur=max_duration)
+    if source_window is not None:
+        w0, w1 = source_window
+        raw = [(s, e, t) for (s, e, t) in raw if s >= w0 - 0.01 and e <= w1 + 0.01]
+        if not raw:
+            return []
     scored = [(s, e, t, _pre_score(t, e - s)) for (s, e, t) in raw]
     scored = [item for item in scored if item[3] > 0.0]
     finalists = _dedupe(scored)[: max(target_count + 4, 10)]

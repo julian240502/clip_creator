@@ -162,7 +162,9 @@ def _highlight_thumb(media: str, at: float, out: Path) -> str | None:
 
 
 def analyse_highlights(source: dict, quality_key: str, target_count: int,
-                       dur_min: float, dur_max: float) -> tuple[list[dict], str | None, str]:
+                       dur_min: float, dur_max: float,
+                       source_window: tuple[float, float] | None = None,
+                       ) -> tuple[list[dict], str | None, str]:
     """Télécharge (si URL), transcrit, note les moments et en extrait une vignette."""
     if source["kind"] == "url":
         max_h = get_quality_preset(quality_key).source_max_height
@@ -174,6 +176,7 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
     found = find_highlights(
         transcript, target_count=target_count,
         min_duration=float(dur_min), max_duration=float(dur_max), model=model,
+        source_window=source_window,
     )
     thumbs_dir = session_dir() / "highlights"
     shutil.rmtree(thumbs_dir, ignore_errors=True)
@@ -335,8 +338,8 @@ def render_captions_controls(source: dict, window, aspect: str, background: str,
             source_lang = (st.session_state.get("source_lang") or "")[:2]
             forced_font = font_for_language(caption_lang)
             translation_note = (
-                " Le calage du texte traduit sur les mots est **approximatif** (réparti "
-                "sur la durée de la phrase, pas un vrai alignement audio)."
+                " Le texte traduit s'affiche **en bloc par phrase** (façon sous-titres "
+                "de film) : pas d'apparition mot par mot, faute d'alignement audio fiable."
                 + (f" Police `{forced_font}` utilisée pour la traduction." if forced_font else "")
             )
             if source_lang and source_lang == caption_lang:
@@ -806,11 +809,28 @@ else:
         )
         + (f" · modèle `{rater}`" if ADVANCED and rater else "")
     )
+    smart_window: tuple[float, float] | None = None
+    if duration:
+        window = st.slider(
+            "Portion à analyser", 0.0, float(duration), (0.0, float(duration)),
+            step=1.0, format="%d s",
+        )
+        if window[0] > 0.0 or window[1] < float(duration):
+            smart_window = (float(window[0]), float(window[1]))
+            st.caption(
+                f"Analyse cadrée sur {timecode(window[0])} – {timecode(window[1])} "
+                f"({timecode(window[1] - window[0])}) · le reste (intros, pauses…) est ignoré."
+            )
+        else:
+            st.caption("Toute la vidéo est analysée.")
+    else:
+        st.caption("Durée inconnue : toute la vidéo sera analysée.")
     if st.button("Analyser les moments", use_container_width=True):
         with st.spinner("Analyse : téléchargement, transcription, notation…"):
             try:
                 found, used, src_lang = analyse_highlights(
                     source, quality_key, target_count, dur_min, dur_max,
+                    source_window=smart_window,
                 )
                 st.session_state["highlights"] = found
                 st.session_state["highlights_model"] = used
