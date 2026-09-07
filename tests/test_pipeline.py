@@ -246,6 +246,8 @@ def test_split_layout_filter_stacks_two_cropped_panels() -> None:
     assert "vstack" in f and f.endswith("[vout]")
     assert "scale=1080:768" in f          # panneau haut : _even(1920*0.40)
     assert "scale=1080:1152" in f         # panneau bas : 1920 - 768
+    assert f.count("flags=lanczos") == 2  # agrandissement net sur les deux panneaux
+    assert f.count("unsharp=") == 1       # léger renforcement, facecam uniquement
 
 
 def test_split_background_needs_a_layout(sample_video: Path, tmp_path: Path) -> None:

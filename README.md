@@ -65,6 +65,11 @@ panneau du bas, sans déformation ni bandes. Réglages : cadre du facecam et
 des sous-titres montre aussi le split. Recadrage **statique** (pas de suivi) —
 pensé pour un facecam fixe dans un coin.
 
+Le facecam est un petit rectangle très agrandi : l'agrandissement se fait en
+**Lanczos** avec un léger **renforcement de netteté** sur ce panneau. Pour un
+résultat plus net encore, exporter en **1080p ou 4K** (la source est alors
+téléchargée en meilleure définition, donc plus de pixels pour la webcam).
+
 ## Sélection intelligente (optionnel)
 
 Nécessite `faster-whisper` (voir plus bas) et, pour la notation, **Ollama** :

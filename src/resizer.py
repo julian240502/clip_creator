@@ -47,21 +47,27 @@ def _split_layout_filter(width: int, height: int, layout: SplitLayout) -> str:
     top_h = max(2, _even(height * frac))
     bot_h = height - top_h
 
-    def _panel(src: str, out: str, rect: tuple[float, float, float, float], panel_h: int) -> str:
+    def _panel(
+        src: str, out: str, rect: tuple[float, float, float, float], panel_h: int,
+        *, sharpen: bool = False,
+    ) -> str:
         fx, fy, fw, fh = (max(0.0, min(1.0, float(v))) for v in rect)
         fw = min(fw, 1.0 - fx) or 0.05
         fh = min(fh, 1.0 - fy) or 0.05
-        # `crop` évalué en fractions de iw/ih ; `increase` + `crop` = on remplit
-        # le panneau, l'excédent est rogné (pas de bandes, pas de déformation).
+        # `crop` en fractions de iw/ih ; `increase` + `crop` remplit le panneau,
+        # l'excédent est rogné (pas de bandes, pas de déformation). Lanczos pour
+        # un agrandissement plus net ; `unsharp` léger sur le facecam (petit
+        # rectangle très agrandi → c'est lui qui pâtit le plus du zoom).
+        post = ",unsharp=5:5:0.8:5:5:0.0" if sharpen else ""
         return (
             f"[{src}]crop=iw*{fw:.5f}:ih*{fh:.5f}:iw*{fx:.5f}:ih*{fy:.5f},"
-            f"scale={width}:{panel_h}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{panel_h},setsar=1[{out}]"
+            f"scale={width}:{panel_h}:force_original_aspect_ratio=increase:flags=lanczos,"
+            f"crop={width}:{panel_h}{post},setsar=1[{out}]"
         )
 
     return (
         "[0:v]split=2[sp_top][sp_bot];"
-        + _panel("sp_top", "pane_top", layout.top, top_h) + ";"
+        + _panel("sp_top", "pane_top", layout.top, top_h, sharpen=True) + ";"
         + _panel("sp_bot", "pane_bot", layout.bottom, bot_h) + ";"
         "[pane_top][pane_bot]vstack,format=yuv420p[vout]"
     )
