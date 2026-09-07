@@ -197,6 +197,22 @@ def timecode(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
+def dur_label(seconds: float) -> str:
+    """Durée courte : « 45 s » sous la minute, « 1 min 30 » au-delà."""
+    total = int(seconds)
+    if total < 60:
+        return f"{total} s"
+    minutes, secs = divmod(total, 60)
+    return f"{minutes} min" if secs == 0 else f"{minutes} min {secs:02d}"
+
+
+def _portion_options(duration: float) -> list[int]:
+    """Bornes (en s) d'un curseur de portion, pas plus fines qu'utile pour une longue vidéo."""
+    total = int(duration)
+    step = 1 if total <= 1200 else 5 if total <= 7200 else 15
+    return sorted({*range(0, total, step), total})
+
+
 def _read_bytes_resilient(path: Path, attempts: int = 3, delay: float = 0.5) -> bytes | None:
     """Lit un fichier en tolérant un verrou transitoire (ex. OneDrive/Drive qui
     synchronise le fichier juste après son écriture). Renvoie None si la lecture
@@ -776,16 +792,18 @@ clip_length = 30
 window = (0.0, None)
 if not smart:
     st.session_state.pop("highlights", None)
-    clip_length = st.slider("Durée d'un clip", 10, 180, 30, 5, format="%d sec")
+    clip_length = st.select_slider(
+        "Durée d'un clip", options=list(range(10, 181, 5)), value=30, format_func=dur_label,
+    )
     if duration:
-        window = st.slider(
-            "Portion à clipper", 0.0, float(duration), (0.0, float(duration)),
-            step=1.0, format="%d s",
+        opts = _portion_options(duration)
+        window = st.select_slider(
+            "Portion à clipper", options=opts, value=(opts[0], opts[-1]), format_func=timecode,
         )
         span = window[1] - window[0]
         estimated = math.ceil(span / clip_length) if span > 0 else 0
         st.metric("Clips à générer", f"≈ {estimated}")
-        st.caption(f"{clip_length} s l'unité · sur {timecode(span)} de vidéo sélectionnée")
+        st.caption(f"{dur_label(clip_length)} l'unité · sur {timecode(span)} de vidéo sélectionnée")
     else:
         st.caption("Durée inconnue : toute la vidéo sera traitée.")
 elif not transcription_available():
@@ -799,10 +817,12 @@ else:
             threading.Thread(target=prewarm_llm, daemon=True).start()
     col_n, col_d = st.columns(2)
     target_count = col_n.slider("Nombre de clips visés", 3, 15, 8)
-    dur_max = col_d.slider("Durée max d'un clip (s)", 20, 120, 60, 5)
+    dur_max = col_d.select_slider(
+        "Durée max d'un clip", options=list(range(20, 121, 5)), value=60, format_func=dur_label,
+    )
     dur_min = max(12.0, round(dur_max * 0.4))
     st.caption(
-        f"Extraits de ~{int(dur_min)} à {dur_max} s. "
+        f"Extraits de ~{dur_label(dur_min)} à {dur_label(dur_max)}. "
         + (
             "Notés par l'IA locale." if rater
             else "IA locale indisponible — notation basique."
@@ -811,9 +831,9 @@ else:
     )
     smart_window: tuple[float, float] | None = None
     if duration:
-        window = st.slider(
-            "Portion à analyser", 0.0, float(duration), (0.0, float(duration)),
-            step=1.0, format="%d s",
+        opts = _portion_options(duration)
+        window = st.select_slider(
+            "Portion à analyser", options=opts, value=(opts[0], opts[-1]), format_func=timecode,
         )
         if window[0] > 0.0 or window[1] < float(duration):
             smart_window = (float(window[0]), float(window[1]))
@@ -914,7 +934,7 @@ if smart:
                 row[2].markdown(title_html, unsafe_allow_html=True)
                 row[2].caption(
                     f"{timecode(item['start'])} – {timecode(item['end'])} · "
-                    f"{int(item['end'] - item['start'])} s"
+                    f"{dur_label(item['end'] - item['start'])}"
                 )
                 row[3].markdown(
                     "<div style='text-align:right;line-height:1.05'>"
