@@ -146,6 +146,32 @@ def test_transcript_without_word_timings_falls_back_to_segment_lines() -> None:
     assert "\\fscx112" not in ass               # pas d'effet "mot actif"
 
 
+def test_long_translated_segment_is_split_into_short_timed_lines() -> None:
+    """Un segment traduit qui couvre plusieurs phrases est débité en fragments
+    ~une ligne, échelonnés sur sa durée — pas un pavé affiché d'un bloc."""
+    long_text = (
+        "Alors écoutez bien parce que c'est vraiment important pour la suite. "
+        "En fait, la plupart des gens se trompent complètement sur ce point. "
+        "Et c'est exactement ce qu'on va corriger maintenant, ensemble."
+    )
+    tr = Transcript(
+        language="fr", duration=20.0, model="t",
+        segments=[TranscriptSegment(0.0, 18.0, long_text, [])],
+    )
+    ass = build_ass(
+        tr, clip_start=0.0, clip_end=20.0, width=1080, height=1920,
+        style=CaptionStyle(mode="lines"),
+    )
+    events = [ln for ln in ass.splitlines() if ln.startswith("Dialogue:")]
+    assert len(events) >= 4                       # découpé, pas un seul bloc
+    # texte visible d'un fragment = après le bloc de tags {...} ; ~2 lignes max
+    visible = [ln.split(",", 9)[-1].split("}", 1)[-1] for ln in events]
+    assert all(len(v) <= 64 for v in visible)
+    # les fragments s'enchaînent dans le temps (pas tous au même instant)
+    starts = [ln.split(",")[1] for ln in events]
+    assert len(set(starts)) >= 4
+
+
 def test_build_ass_with_no_speech_has_no_dialogue() -> None:
     empty = Transcript(language="nn", duration=5.0, model="test", segments=[])
     ass = build_ass(

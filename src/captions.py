@@ -195,8 +195,46 @@ def _group_lines(words: list[Word], *, max_words: int, max_duration: float, gap:
     return lines
 
 
+_TRANSLATED_LINE_CHARS = 46   # longueur cible d'une ligne de sous-titre traduit
+_TRANSLATED_MIN_SEC = 1.1     # durée plancher d'un fragment (pas de flash)
+_CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
+_SENT_TAIL = (".", "!", "?", "…", "。", "！", "？")
+
+
+def _chunk_text(text: str) -> list[str]:
+    """Découpe un texte prêt (traduction) en fragments courts et lisibles :
+    ~une ligne de sous-titre, en coupant aux fins de phrase quand c'est possible.
+    Chinois / japonais / coréen : découpage au caractère (pas d'espaces)."""
+    cjk = len(_CJK_RE.findall(text)) > len(text) / 3
+    limit = _TRANSLATED_LINE_CHARS // (2 if cjk else 1)
+    units = list(text) if cjk else text.split()
+    chunks: list[str] = []
+    current: list[str] = []
+    length = 0
+    for unit in units:
+        current.append(unit)
+        length += len(unit) + (0 if cjk else 1)
+        if length >= limit or unit.endswith(_SENT_TAIL):
+            chunks.append(("" if cjk else " ").join(current).strip())
+            current, length = [], 0
+    if current:
+        chunks.append(("" if cjk else " ").join(current).strip())
+    chunks = [c for c in chunks if c]
+    # Recolle un tout petit reste (« tout. ») au fragment précédent — plus lisible
+    # qu'une ligne orpheline d'un ou deux mots.
+    if len(chunks) >= 2 and len(chunks[-1]) <= (6 if cjk else 14):
+        glue = "" if cjk else " "
+        chunks[-2:] = [chunks[-2] + glue + chunks[-1]]
+    return chunks
+
+
 def _segment_lines(transcript: Transcript, clip_start: float, clip_end: float) -> list[_Line]:
-    """Une ligne par segment (texte déjà prêt, ex. traduction) — calage au segment."""
+    """Fragments courts par segment (texte déjà prêt, ex. traduction).
+
+    Un segment Whisper peut couvrir plusieurs phrases : on le débite en fragments
+    ~une ligne, répartis sur sa durée proportionnellement à leur longueur (avec un
+    plancher), pour ne pas afficher un pavé illisible d'un coup.
+    """
     lines: list[_Line] = []
     for seg in transcript.segments:
         if seg.end <= clip_start or seg.start >= clip_end:
@@ -204,11 +242,20 @@ def _segment_lines(transcript: Transcript, clip_start: float, clip_end: float) -
         text = seg.text.strip()
         if not text:
             continue
-        lines.append(_Line(
-            words=[], text=text,
-            start=max(0.0, seg.start - clip_start),
-            end=min(clip_end, seg.end) - clip_start,
-        ))
+        chunks = _chunk_text(text) or [text]
+        span = max(0.2, seg.end - seg.start)
+        floor = min(_TRANSLATED_MIN_SEC, span / len(chunks))
+        weights = [len(c) for c in chunks]
+        free = span - floor * len(chunks)
+        total = sum(weights) or 1
+        cursor = seg.start
+        for chunk, weight in zip(chunks, weights, strict=True):
+            end = cursor + floor + (free * weight / total if free > 0 else 0.0)
+            a = max(0.0, cursor - clip_start)
+            b = min(clip_end, min(end, seg.end)) - clip_start
+            if b > a and end > clip_start:
+                lines.append(_Line(words=[], text=chunk, start=a, end=b))
+            cursor = end
     return lines
 
 

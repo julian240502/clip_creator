@@ -121,9 +121,10 @@ est transcrite normalement puis les segments réellement exportés sont **tradui
 Ollama** (mis en cache) — pas tout le transcript d'une longue vidéo source si seule
 une poignée de clips en est extraite, pour rester rapide. Un segment traduit n'a pas
 de vrai alignement mot à mot (impossible à récupérer depuis l'audio, qui est dans une
-autre langue) : il s'affiche donc **en bloc, comme des sous-titres de film**, quel que
-soit le mode d'apparition choisi pour le reste de la vidéo. Un lot de segments mal
-traduit par le modèle est retenté par plus petits lots avant d'abandonner en VO. Pour
+autre langue) : il s'affiche donc **en bloc**, sans mode d'apparition mot par mot.
+Chaque segment est **débité en fragments courts** (~une ligne, coupés aux fins de
+phrase) échelonnés sur sa durée — pas un pavé illisible d'un coup. Un lot de segments
+mal traduit par le modèle est retenté par plus petits lots avant d'abandonner en VO. Pour
 le chinois / coréen / japonais, une police à glyphes adaptés est imposée (*Microsoft
 YaHei* / *Malgun Gothic* / *Yu Gothic*, livrées avec Windows). Nécessite Ollama.
 
