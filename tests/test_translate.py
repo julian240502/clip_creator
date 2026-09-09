@@ -1,12 +1,18 @@
 from src import llm
 from src.transcribe import Transcript, TranscriptSegment, Word
-from src.translate import language_supported, translate_transcript
+from src.translate import (
+    _clean_unit_text,
+    _merge_short_units,
+    language_supported,
+    translate_transcript,
+)
 
 
 def _en_transcript() -> Transcript:
+    # Un vrai trou entre les deux phrases : elles ne doivent pas fusionner.
     segs = [
         TranscriptSegment(0.0, 2.0, "Hello everyone.", [Word(0.0, 2.0, "Hello everyone.")]),
-        TranscriptSegment(2.0, 5.0, "This is a test.", [Word(2.0, 5.0, "This is a test.")]),
+        TranscriptSegment(2.9, 5.0, "This is a test.", [Word(2.9, 5.0, "This is a test.")]),
     ]
     return Transcript(language="en", duration=5.0, model="test", segments=segs)
 
@@ -96,16 +102,14 @@ def test_translate_transcript_retries_a_malformed_batch_in_smaller_halves(
     monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
 
     def fake_chat_json(system, user, **_kw):
-        if len(user.strip().splitlines()) > 1:
+        if len([ln for ln in user.strip().splitlines() if ln.startswith("[")]) > 1:
             return {"t": 2}  # lot complet -> réponse mal formée (un nombre, pas une liste)
-        return {"t": [f"Trad[{user.strip()}]"]}
+        return {"t": ["Trad-A" if "Hello" in user else "Trad-B"]}
 
     monkeypatch.setattr(llm, "chat_json", fake_chat_json)
 
     out = translate_transcript(_en_transcript(), "fr", model="llama3")
-    assert [s.text for s in out.segments] == [
-        "Trad[[0] Hello everyone.]", "Trad[[0] This is a test.]",
-    ]
+    assert [s.text for s in out.segments] == ["Trad-A", "Trad-B"]
 
 
 def test_translate_transcript_recovers_items_dropped_from_a_batch(monkeypatch, tmp_path) -> None:
@@ -122,6 +126,75 @@ def test_translate_transcript_recovers_items_dropped_from_a_batch(monkeypatch, t
     monkeypatch.setattr(llm, "chat_json", fake_chat_json)
     out = translate_transcript(_en_transcript(), "fr", model="llama3")
     assert [s.text for s in out.segments] == ["FR0", "FR-solo"]
+
+
+def test_clean_unit_text_strips_non_spoken_annotations() -> None:
+    assert _clean_unit_text("[Music]") == ""
+    assert _clean_unit_text("♪♪") == ""
+    assert _clean_unit_text("(rires) c'est fou") == "c'est fou"
+    assert _clean_unit_text("Bonjour tout le monde.") == "Bonjour tout le monde."
+
+
+def test_merge_short_units_glues_a_flash_to_the_next_line() -> None:
+    from src.highlights import _Unit
+
+    units = [
+        _Unit(0.0, 0.4, "Ouais."),
+        _Unit(0.6, 3.0, "et donc voilà ce que je voulais dire."),
+        _Unit(9.0, 12.0, "Une autre phrase bien plus loin dans le temps."),
+    ]
+    merged = _merge_short_units(units)
+    assert [u.text for u in merged] == [
+        "Ouais. et donc voilà ce que je voulais dire.",
+        "Une autre phrase bien plus loin dans le temps.",
+    ]
+    assert (merged[0].start, merged[0].end) == (0.0, 3.0)
+
+
+def test_translate_transcript_drops_non_lexical_units(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+    tr = Transcript(
+        language="en", duration=6.0, model="t",
+        segments=[TranscriptSegment(0.0, 6.0, "[Music] Hello there.", [
+            Word(0.0, 1.5, "[Music]"), Word(3.0, 3.4, "Hello"), Word(3.4, 3.9, "there."),
+        ])],
+    )
+    seen: list[str] = []
+
+    def fake(system, user, **_kw):
+        seen.append(user)
+        return {"t": ["Bonjour toi."]}
+
+    monkeypatch.setattr(llm, "chat_json", fake)
+    out = translate_transcript(tr, "fr", model="llama3")
+    assert [s.text for s in out.segments] == ["Bonjour toi."]
+    assert len(seen) == 1 and "[Music]" not in seen[0] and "Hello there." in seen[0]
+
+
+def test_translate_batch_prompt_carries_duration_and_context(monkeypatch, tmp_path) -> None:
+    """Le corps envoyé au modèle porte la durée à l'écran de chaque réplique et,
+    à partir du 2e lot, la réplique précédente en contexte."""
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr("src.translate._BATCH", 2, raising=False)
+    bodies: list[str] = []
+
+    def fake(system, user, **_kw):
+        bodies.append(user)
+        n = len([ln for ln in user.splitlines() if ln.startswith("[")])
+        return {"t": [f"tr{i}" for i in range(n)]}
+
+    monkeypatch.setattr(llm, "chat_json", fake)
+
+    # phrases bien espacées (> 0.6 s) pour qu'elles ne fusionnent pas
+    words = [Word(i * 2.0, i * 2.0 + 0.6, f"phrase{i}.") for i in range(6)]
+    segs = [TranscriptSegment(w.start, w.end, w.text, [w]) for w in words]
+    tr = Transcript(language="en", duration=12.0, model="t", segments=segs)
+
+    translate_transcript(tr, "fr", model="llama3")
+    # _sentence_units capitalise la 1re lettre -> "Phrase0."
+    assert "(0.6s) Phrase0." in bodies[0]           # durée à l'écran dans le corps
+    assert "Contexte déjà dit" not in bodies[0]     # 1er lot : pas de contexte
+    assert "Contexte déjà dit" in bodies[1]         # 2e lot : réplique précédente
 
 
 def test_translate_transcript_only_translates_units_within_windows(

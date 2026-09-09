@@ -151,6 +151,12 @@ longue vidéo), puis :
   via le minutage réel des mots, et chaque phrase traduite s'affiche sur sa fenêtre
   `[premier mot, dernier mot]`. Un bloc unique couvrant plusieurs phrases débordait
   sur les silences et les fragments dérivaient ; ce n'est plus le cas ;
+- avant traduction : les **annotations non parlées** (`[Music]`, `(rires)`, `♪`)
+  sont retirées, et les **micro-unités collées** (« Ouais. » + phrase suivante)
+  sont fusionnées pour ne pas flasher seules ;
+- le modèle reçoit la **durée à l'écran** de chaque réplique (il condense si la
+  traduction ne s'y lit pas ~15 car./s) et la **réplique précédente** en contexte
+  (pronoms / temps cohérents) ;
 - un lot mal répondu est retenté par plus petits lots, puis segment par segment,
   avant d'être laissé en VO (un modèle local renvoie parfois un tableau JSON
   incomplet).

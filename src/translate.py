@@ -2,22 +2,27 @@
 
 Sert aux sous-titres dans une autre langue que celle parlée. Le texte traduit
 n'a pas de vrai minutage mot à mot (impossible à récupérer : l'audio est dans une
-autre langue). Pour rester **calé sur la parole** malgré tout, chaque segment
-Whisper est d'abord redécoupé en unités ~phrases via le minutage réel des mots
+autre langue). Pour rester **calé sur la parole**, chaque segment Whisper est
+d'abord redécoupé en unités ~phrases via le minutage réel des mots
 (`src.highlights._sentence_units`) ; chaque phrase traduite s'affiche ensuite sur
-sa propre fenêtre `[premier mot, dernier mot]`, en bloc (voir
-`src/captions.py::build_ass`). Sans ça, un bloc unique couvrant plusieurs phrases
-débordait sur les silences et les fragments dérivaient.
+sa propre fenêtre `[premier mot, dernier mot]`, en bloc.
+
+Avant traduction : on **nettoie** les annotations non parlées (`[Music]`, `(rires)`,
+`♪`), on **fusionne** les micro-unités collées (« Ouais. » + phrase suivante), et
+on donne au modèle la **durée à l'écran** de chaque réplique (pour qu'il condense
+si besoin) ainsi que la **réplique précédente** en contexte (cohérence des
+pronoms / temps).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 
-from src.highlights import _sentence_units
+from src.highlights import _sentence_units, _Unit
 from src.paths import TRANSCRIPTIONS_DIR
 from src.transcribe import Transcript, TranscriptSegment
 
@@ -35,34 +40,81 @@ _LANG_NAMES = {
 }
 _BATCH = 12
 
+# Annotations non parlées émises par Whisper.
+_ANNOTATION_RE = re.compile(r"[\[(][^\])]*[\])]|[♪♫♬🎵🎶]+|\bBLANK_AUDIO\b", re.IGNORECASE)
+_HAS_LETTER_RE = re.compile(r"[^\W\d_]", re.UNICODE)
+
+# Fusion des micro-unités : trou court + résultat qui reste court et bref.
+_MERGE_GAP = 0.6
+_MERGE_MAX_CHARS = 64
+_MERGE_MAX_SEC = 7.0
+
 
 def language_supported(code: str | None) -> bool:
     return bool(code) and code.lower() in _LANG_NAMES
 
 
+def _clean_unit_text(text: str) -> str:
+    """Retire les annotations non parlées ; renvoie « » si rien de lexical ne reste."""
+    text = _ANNOTATION_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip(" -–—*·_~")
+    return text if _HAS_LETTER_RE.search(text) else ""
+
+
+def _merge_short_units(units: list[_Unit]) -> list[_Unit]:
+    """Recolle une unité à la précédente quand elles sont collées dans le temps et
+    que le résultat reste court (évite les « Ouais. » qui flashent seuls)."""
+    if not units:
+        return units
+    merged = [units[0]]
+    for unit in units[1:]:
+        prev = merged[-1]
+        joined = len(prev.text) + 1 + len(unit.text)
+        if (
+            unit.start - prev.end <= _MERGE_GAP
+            and joined <= _MERGE_MAX_CHARS
+            and unit.end - prev.start <= _MERGE_MAX_SEC
+        ):
+            merged[-1] = _Unit(prev.start, unit.end, f"{prev.text} {unit.text}")
+        else:
+            merged.append(unit)
+    return merged
+
+
 def _system_prompt(target_name: str) -> str:
     return (
         f"Tu traduis des sous-titres vidéo en {target_name}. On te donne une liste "
-        "numérotée de segments. Réponds UNIQUEMENT en JSON "
-        '{"t": ["<traduction du segment 0>", "<traduction du segment 1>", ...]} — '
-        "exactement le même nombre d'éléments, dans le même ordre. Traduis "
-        "naturellement, en phrases courtes, sans fusionner ni ajouter de segments."
+        "numérotée de répliques successives d'un même dialogue : garde pronoms, "
+        "temps et vocabulaire cohérents d'une réplique à l'autre. Chaque réplique "
+        "indique entre parenthèses sa durée à l'écran ; si la traduction ne s'y lit "
+        "pas confortablement (~15 caractères par seconde), condense-la sans perdre "
+        "le sens. Réponds UNIQUEMENT en JSON "
+        '{"t": ["<traduction 0>", "<traduction 1>", ...]} — exactement le même '
+        "nombre d'éléments, même ordre, sans fusionner ni ajouter de répliques."
     )
 
 
 def _cache_path(texts: list[str], model: str, target: str) -> Path:
-    raw = f"{target}|{model}|v2|{'|'.join(texts)}"
+    raw = f"{target}|{model}|v3|{'|'.join(texts)}"
     key = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
     return Path(TRANSCRIPTIONS_DIR) / f"tr_{target}_{key}.json"
 
 
-def _translate_batch(system: str, chunk: list[str], model: str) -> list[str] | None:
+def _translate_batch(
+    system: str, texts: list[str], durations: list[float], model: str, context: str = "",
+) -> list[str] | None:
     """Traduit un lot ; renvoie None si la réponse est inexploitable."""
     from src.llm import chat_json
 
-    body = "\n".join(f"[{i}] {t}" for i, t in enumerate(chunk))
+    lines = []
+    if context:
+        lines.append(f"Contexte déjà dit (ne pas traduire) : {context}")
+    lines += [
+        f"[{i}] ({d:.1f}s) {t}"
+        for i, (t, d) in enumerate(zip(texts, durations, strict=True))
+    ]
     try:
-        data = chat_json(system, body, model=model, timeout=150.0)
+        data = chat_json(system, "\n".join(lines), model=model, timeout=150.0)
         translated = data.get("t") or data.get("translations") or data.get("segments") or []
     except Exception:  # noqa: BLE001 - Ollama absent/en erreur -> VO gardée
         return None
@@ -75,23 +127,25 @@ def _padded(result: list[str] | None, n: int) -> list[str]:
     return result + [""] * (n - len(result))
 
 
-def _translate_segments(texts: list[str], target: str, model: str) -> list[str]:
+def _translate_segments(
+    texts: list[str], durations: list[float], target: str, model: str,
+) -> list[str]:
     system = _system_prompt(_LANG_NAMES[target])
     out = list(texts)
     for start in range(0, len(texts), _BATCH):
-        chunk = texts[start : start + _BATCH]
-        translated = _translate_batch(system, chunk, model)
-        if translated is None and len(chunk) > 1:
+        ct, cd = texts[start : start + _BATCH], durations[start : start + _BATCH]
+        context = texts[start - 1] if start > 0 else ""
+        translated = _translate_batch(system, ct, cd, model, context)
+        if translated is None and len(ct) > 1:
             # Lot mal formé : on retente en deux moitiés plus petites, plus
-            # fiables. Chaque moitié est calée sur sa taille attendue pour ne pas
-            # décaler l'autre.
-            mid = len(chunk) // 2
-            left = _padded(_translate_batch(system, chunk[:mid], model), mid)
-            right = _padded(_translate_batch(system, chunk[mid:], model), len(chunk) - mid)
+            # fiables. Chaque moitié est calée sur sa taille attendue.
+            mid = len(ct) // 2
+            left = _padded(_translate_batch(system, ct[:mid], cd[:mid], model), mid)
+            right = _padded(_translate_batch(system, ct[mid:], cd[mid:], model), len(ct) - mid)
             translated = left + right
         if not translated:
             continue
-        for i in range(len(chunk)):
+        for i in range(len(ct)):
             if i < len(translated) and str(translated[i]).strip():
                 out[start + i] = str(translated[i]).strip()
 
@@ -104,7 +158,7 @@ def _translate_segments(texts: list[str], target: str, model: str) -> list[str]:
     ]
     if stragglers and len(stragglers) <= len(texts) / 2:
         for i in stragglers:
-            one = _translate_batch(system, [texts[i]], model)
+            one = _translate_batch(system, [texts[i]], [durations[i]], model)
             if one and str(one[0]).strip():
                 out[i] = str(one[0]).strip()
     return out
@@ -143,11 +197,18 @@ def translate_transcript(
         kept = list(transcript.segments)
     if not kept:
         return transcript
-    units = _sentence_units(replace(transcript, segments=kept))
+
+    units: list[_Unit] = []
+    for unit in _sentence_units(replace(transcript, segments=kept)):
+        cleaned = _clean_unit_text(unit.text)
+        if cleaned:
+            units.append(_Unit(unit.start, unit.end, cleaned))
+    units = _merge_short_units(units)
     if not units:
         return transcript
 
-    originals = [unit.text.strip() for unit in units]
+    originals = [unit.text for unit in units]
+    durations = [max(0.1, unit.end - unit.start) for unit in units]
     cache_file = _cache_path(originals, model or "", target)
     translations: list[str] | None = None
     if cache and cache_file.is_file():
@@ -161,7 +222,7 @@ def translate_transcript(
     if translations is None:
         if not model:
             return transcript
-        translations = _translate_segments(originals, target, model)
+        translations = _translate_segments(originals, durations, target, model)
         if cache:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(translations, ensure_ascii=False), encoding="utf-8")
