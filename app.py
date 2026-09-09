@@ -1039,12 +1039,12 @@ if not smart:
 elif not transcription_available():
     st.warning("Nécessite `pip install -r requirements-transcribe.txt`.")
 else:
-    rater = pick_model() if ollama_available() else None
+    rater = pick_rating_model() if ollama_available() else None
     if not st.session_state.get("smart_warming"):
         st.session_state["smart_warming"] = True
         threading.Thread(target=prewarm_model, daemon=True).start()
         if rater:
-            threading.Thread(target=prewarm_llm, daemon=True).start()
+            threading.Thread(target=lambda: prewarm_llm(rater), daemon=True).start()
     col_n, col_d = st.columns(2)
     target_count = col_n.slider("Nombre de clips visés", 3, 15, 8)
     dur_max = col_d.select_slider(
