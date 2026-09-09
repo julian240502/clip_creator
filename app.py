@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
@@ -650,12 +651,38 @@ def render_split_controls(source: dict, aspect: str) -> SplitLayout | None:
     return layout
 
 
+@functools.lru_cache(maxsize=1)
+def _git_revision() -> str:
+    """`branche · commit court` du dépôt (débogage, ex. 2 instances côte à côte).
+    Suffixe `*` si des fichiers suivis sont modifiés. `` si hors dépôt git."""
+    root = str(Path(__file__).resolve().parent)
+
+    def _git(*args: str) -> str:
+        try:
+            return subprocess.run(
+                ["git", "-C", root, *args], capture_output=True, text=True, timeout=3,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    if not branch:
+        return ""
+    sha = _git("rev-parse", "--short", "HEAD")
+    dirty = _git("status", "--porcelain", "--untracked-files=no")
+    label = f"{branch} · {sha}" if sha else branch
+    return f"{label} *" if dirty else label
+
+
 def render_diagnostics() -> None:
     """Panneau latéral du mode avancé : détails techniques masqués par défaut."""
     from src.encoder import cuda_scaling_available, encoder_label, resolve_video_encoder
     from src.resizer import _cuda_blur_enabled
 
     st.markdown("**Diagnostic**")
+    revision = _git_revision()
+    if revision:
+        st.caption(f"Version · `{revision}`")
     llm_model = pick_model() if ollama_available() else None
     whisper = DEFAULT_MODEL if transcription_available() else None
     try:
