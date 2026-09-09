@@ -16,11 +16,13 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Le chat d'un stream très actif se compte en dizaines de milliers de messages et
-# `chat-downloader` pagine lentement (rate-limit Twitch). On borne : c'est un
-# signal statistique, un échantillon représentatif suffit. Réglable par env.
+# Le chat d'un très gros stream (Kai Cenat & co) = centaines de milliers de
+# messages sur 20 min, et `chat-downloader` pagine (rate-limit Twitch). On borne :
+# c'est un signal statistique, un échantillon représentatif suffit. Une coupure
+# au temps ne couvre que le début de la fenêtre — monter
+# CLIP_CREATOR_CHAT_MAX_SECONDS pour aller plus loin, ou CLIP_CREATOR_DISABLE_CHAT=1.
 _CHAT_MAX_SECONDS = float(os.environ.get("CLIP_CREATOR_CHAT_MAX_SECONDS", "75") or 75)
-_CHAT_MAX_MESSAGES = int(os.environ.get("CLIP_CREATOR_CHAT_MAX_MESSAGES", "40000") or 40000)
+_CHAT_MAX_MESSAGES = int(os.environ.get("CLIP_CREATOR_CHAT_MAX_MESSAGES", "150000") or 150000)
 
 # Emotes / expressions de rire les plus courantes sur Twitch (+ « clip it »).
 _LAUGH_RE = re.compile(
