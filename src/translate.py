@@ -90,6 +90,20 @@ def _translate_segments(texts: list[str], target: str, model: str) -> list[str]:
         for i in range(len(chunk)):
             if i < len(translated) and str(translated[i]).strip():
                 out[start + i] = str(translated[i]).strip()
+
+    # Passe finale : les segments encore en VO (lot renvoyé incomplet, élément
+    # vide…) sont retentés **un par un** — une requête à un seul élément ne
+    # "perd" quasi jamais d'item. Sautée si plus de la moitié a échoué (Ollama
+    # clairement HS : inutile de le marteler).
+    stragglers = [
+        i for i, (src, got) in enumerate(zip(texts, out, strict=True))
+        if got == src and src.strip()
+    ]
+    if stragglers and len(stragglers) <= len(texts) / 2:
+        for i in stragglers:
+            one = _translate_batch(system, [texts[i]], model)
+            if one and str(one[0]).strip():
+                out[i] = str(one[0]).strip()
     return out
 
 

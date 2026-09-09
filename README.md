@@ -151,7 +151,8 @@ de vrai alignement mot à mot (impossible à récupérer depuis l'audio, qui est
 autre langue) : il s'affiche donc **en bloc**, sans mode d'apparition mot par mot.
 Chaque segment est **débité en fragments courts** (~une ligne, coupés aux fins de
 phrase) échelonnés sur sa durée — pas un pavé illisible d'un coup. Un lot de segments
-mal traduit par le modèle est retenté par plus petits lots avant d'abandonner en VO. Pour
+mal traduit par le modèle est retenté par plus petits lots, puis segment par segment,
+avant d'abandonner en VO (un modèle local renvoie parfois un tableau JSON incomplet). Pour
 le chinois / coréen / japonais, une police à glyphes adaptés est imposée (*Microsoft
 YaHei* / *Malgun Gothic* / *Yu Gothic*, livrées avec Windows). Nécessite Ollama.
 

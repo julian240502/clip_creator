@@ -84,6 +84,22 @@ def test_translate_transcript_retries_a_malformed_batch_in_smaller_halves(
     ]
 
 
+def test_translate_transcript_recovers_items_dropped_from_a_batch(monkeypatch, tmp_path) -> None:
+    """Un lot renvoyé trop court (le modèle « oublie » le dernier élément) laisse
+    des segments en VO : ils sont retentés un par un en passe finale."""
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+
+    def fake_chat_json(system, user, **_kw):
+        lines = user.strip().splitlines()
+        if len(lines) > 1:                       # lot : renvoie un élément de moins
+            return {"t": [f"FR{i}" for i in range(len(lines) - 1)]}
+        return {"t": ["FR-solo"]}                # requête unitaire : fiable
+
+    monkeypatch.setattr(llm, "chat_json", fake_chat_json)
+    out = translate_transcript(_en_transcript(), "fr", model="llama3")
+    assert [s.text for s in out.segments] == ["FR0", "FR-solo"]
+
+
 def test_translate_transcript_only_translates_segments_within_windows(
     monkeypatch, tmp_path,
 ) -> None:
