@@ -1,10 +1,13 @@
-"""Traduction des segments d'un transcript via Ollama, avec mise en cache.
+"""Traduction des sous-titres via Ollama, avec mise en cache.
 
 Sert aux sous-titres dans une autre langue que celle parlée. Le texte traduit
-n'a pas de vrai alignement mot à mot (impossible à récupérer depuis l'audio
-source, qui est dans une autre langue) : on affiche donc le segment entier
-comme un bloc (façon sous-titres de film), plutôt que de tenter un mode
-d'apparition mot par mot / karaoké basé sur un minutage inventé.
+n'a pas de vrai minutage mot à mot (impossible à récupérer : l'audio est dans une
+autre langue). Pour rester **calé sur la parole** malgré tout, chaque segment
+Whisper est d'abord redécoupé en unités ~phrases via le minutage réel des mots
+(`src.highlights._sentence_units`) ; chaque phrase traduite s'affiche ensuite sur
+sa propre fenêtre `[premier mot, dernier mot]`, en bloc (voir
+`src/captions.py::build_ass`). Sans ça, un bloc unique couvrant plusieurs phrases
+débordait sur les silences et les fragments dérivaient.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+from src.highlights import _sentence_units
 from src.paths import TRANSCRIPTIONS_DIR
 from src.transcribe import Transcript, TranscriptSegment
 
@@ -47,7 +51,7 @@ def _system_prompt(target_name: str) -> str:
 
 
 def _cache_path(texts: list[str], model: str, target: str) -> Path:
-    raw = f"{target}|{model}|{'|'.join(texts)}"
+    raw = f"{target}|{model}|v2|{'|'.join(texts)}"
     key = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
     return Path(TRANSCRIPTIONS_DIR) / f"tr_{target}_{key}.json"
 
@@ -78,9 +82,9 @@ def _translate_segments(texts: list[str], target: str, model: str) -> list[str]:
         chunk = texts[start : start + _BATCH]
         translated = _translate_batch(system, chunk, model)
         if translated is None and len(chunk) > 1:
-            # Lot mal formé ou en erreur : on retente en deux moitiés plus petites,
-            # plus fiables, plutôt que d'abandonner tout le lot en VO. Chaque moitié
-            # est calée sur sa taille attendue pour ne pas décaler l'autre moitié.
+            # Lot mal formé : on retente en deux moitiés plus petites, plus
+            # fiables. Chaque moitié est calée sur sa taille attendue pour ne pas
+            # décaler l'autre.
             mid = len(chunk) // 2
             left = _padded(_translate_batch(system, chunk[:mid], model), mid)
             right = _padded(_translate_batch(system, chunk[mid:], model), len(chunk) - mid)
@@ -91,10 +95,9 @@ def _translate_segments(texts: list[str], target: str, model: str) -> list[str]:
             if i < len(translated) and str(translated[i]).strip():
                 out[start + i] = str(translated[i]).strip()
 
-    # Passe finale : les segments encore en VO (lot renvoyé incomplet, élément
-    # vide…) sont retentés **un par un** — une requête à un seul élément ne
-    # "perd" quasi jamais d'item. Sautée si plus de la moitié a échoué (Ollama
-    # clairement HS : inutile de le marteler).
+    # Passe finale : les items encore identiques à la source sont retentés **un
+    # par un** (une requête à un seul élément ne "perd" quasi jamais). Sautée si
+    # plus de la moitié a échoué (Ollama HS : inutile de le marteler).
     stragglers = [
         i for i, (src, got) in enumerate(zip(texts, out, strict=True))
         if got == src and src.strip()
@@ -107,17 +110,6 @@ def _translate_segments(texts: list[str], target: str, model: str) -> list[str]:
     return out
 
 
-def _rebuilt(transcript: Transcript, target: str, keep: list[int], texts: list[str]) -> Transcript:
-    segments = list(transcript.segments)
-    for idx, text in zip(keep, texts, strict=True):
-        seg = segments[idx]
-        # Pas de mots : un bloc par segment, comme des sous-titres de film — voir
-        # src/captions.py::build_ass (bascule automatique en mode "lignes" dès
-        # qu'une fenêtre n'a pas de minutage mot à mot).
-        segments[idx] = TranscriptSegment(start=seg.start, end=seg.end, text=text, words=[])
-    return replace(transcript, segments=segments, language=target)
-
-
 def translate_transcript(
     transcript: Transcript,
     target: str,
@@ -126,15 +118,15 @@ def translate_transcript(
     cache: bool = True,
     windows: list[tuple[float, float]] | None = None,
 ) -> Transcript:
-    """Transcript avec les segments utiles traduits en `target` (affichage en bloc).
+    """Transcript où chaque **unité ~phrase** utile est traduite en `target`.
 
-    `windows` restreint la traduction aux segments qui chevauchent au moins une
-    fenêtre `(start, end)` — typiquement les clips réellement exportés — pour ne
-    pas traduire (lentement, via l'IA locale) des minutes de transcript jamais
-    utilisées. Sans `windows`, tout le transcript est traduit.
+    `windows` : ne traiter que les segments qui chevauchent un clip réellement
+    exporté (perf). Chaque phrase traduite est portée sur sa fenêtre temporelle
+    réelle `[premier mot, dernier mot]`. Transcript renvoyé sans mots -> affichage
+    en bloc par unité (`src/captions.py::build_ass`).
 
-    Renvoie le transcript inchangé si la cible est déjà la langue parlée, si la
-    langue n'est pas gérée, ou si aucun modèle Ollama n'est disponible.
+    Inchangé si la cible est déjà la langue parlée, si la langue n'est pas gérée,
+    ou si aucun modèle Ollama n'est disponible.
     """
     target = (target or "").lower()
     if not language_supported(target) or not transcript.segments:
@@ -143,31 +135,40 @@ def translate_transcript(
         return transcript
 
     if windows:
-        keep = [
-            i for i, seg in enumerate(transcript.segments)
+        kept = [
+            seg for seg in transcript.segments
             if any(seg.end > w0 and seg.start < w1 for w0, w1 in windows)
         ]
     else:
-        keep = list(range(len(transcript.segments)))
-    if not keep:
+        kept = list(transcript.segments)
+    if not kept:
+        return transcript
+    units = _sentence_units(replace(transcript, segments=kept))
+    if not units:
         return transcript
 
-    originals = [transcript.segments[i].text.strip() for i in keep]
-
+    originals = [unit.text.strip() for unit in units]
     cache_file = _cache_path(originals, model or "", target)
+    translations: list[str] | None = None
     if cache and cache_file.is_file():
         try:
             cached = json.loads(cache_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             cached = None
-        if isinstance(cached, list) and len(cached) == len(keep):
-            return _rebuilt(transcript, target, keep, cached)
+        if isinstance(cached, list) and len(cached) == len(units):
+            translations = [str(item) for item in cached]
 
-    if not model:
-        return transcript
+    if translations is None:
+        if not model:
+            return transcript
+        translations = _translate_segments(originals, target, model)
+        if cache:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps(translations, ensure_ascii=False), encoding="utf-8")
 
-    texts = _translate_segments(originals, target, model)
-    if cache:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(json.dumps(texts, ensure_ascii=False), encoding="utf-8")
-    return _rebuilt(transcript, target, keep, texts)
+    segments = [
+        TranscriptSegment(start=unit.start, end=unit.end, text=text.strip(), words=[])
+        for unit, text in zip(units, translations, strict=True)
+        if text.strip()
+    ]
+    return replace(transcript, segments=segments, language=target)

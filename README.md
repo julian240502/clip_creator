@@ -143,18 +143,22 @@ plus robuste que `large-v3-turbo` sur audio dégradé — tient sur 8 Go de VRAM
 ### Sous-titres dans une autre langue
 
 Menu **« Langue des sous-titres »** : *Auto* (langue parlée, comportement par défaut)
-ou une cible **FR / EN / ZH / KO**. Si la cible diffère de la langue parlée, la vidéo
-est transcrite normalement puis les segments réellement exportés sont **traduits par
-Ollama** (mis en cache) — pas tout le transcript d'une longue vidéo source si seule
-une poignée de clips en est extraite, pour rester rapide. Un segment traduit n'a pas
-de vrai alignement mot à mot (impossible à récupérer depuis l'audio, qui est dans une
-autre langue) : il s'affiche donc **en bloc**, sans mode d'apparition mot par mot.
-Chaque segment est **débité en fragments courts** (~une ligne, coupés aux fins de
-phrase) échelonnés sur sa durée — pas un pavé illisible d'un coup. Un lot de segments
-mal traduit par le modèle est retenté par plus petits lots, puis segment par segment,
-avant d'abandonner en VO (un modèle local renvoie parfois un tableau JSON incomplet). Pour
-le chinois / coréen / japonais, une police à glyphes adaptés est imposée (*Microsoft
-YaHei* / *Malgun Gothic* / *Yu Gothic*, livrées avec Windows). Nécessite Ollama.
+ou une cible **FR / EN / ZH / KO**. Si la cible diffère de la langue parlée, seuls les
+segments des clips réellement exportés sont traités (pas tout le transcript d'une
+longue vidéo), puis :
+
+- **calage sur la parole** : chaque segment Whisper est redécoupé en unités ~phrases
+  via le minutage réel des mots, et chaque phrase traduite s'affiche sur sa fenêtre
+  `[premier mot, dernier mot]`. Un bloc unique couvrant plusieurs phrases débordait
+  sur les silences et les fragments dérivaient ; ce n'est plus le cas ;
+- un lot mal répondu est retenté par plus petits lots, puis segment par segment,
+  avant d'être laissé en VO (un modèle local renvoie parfois un tableau JSON
+  incomplet).
+
+Le texte traduit n'a pas de minutage mot à mot (l'audio est dans une autre langue) :
+affichage **en bloc** par unité, sans mode mot par mot / karaoké. Pour le chinois /
+coréen / japonais, une police à glyphes adaptés est imposée (*Microsoft YaHei* /
+*Malgun Gothic* / *Yu Gothic*, livrées avec Windows). Nécessite Ollama.
 
 ## Prérequis
 

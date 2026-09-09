@@ -16,10 +16,9 @@ def test_language_supported() -> None:
     assert not language_supported("") and not language_supported("xx")
 
 
-def test_translate_transcript_replaces_text_as_a_block_per_segment(monkeypatch, tmp_path) -> None:
-    """Sous-titres traduits = un bloc par segment (façon film), pas d'animation mot
-    par mot : impossible d'aligner un vrai minutage sur un texte réécrit dans une
-    autre langue, donc on n'invente pas un timing synthétique."""
+def test_translate_transcript_replaces_text_as_a_block_per_sentence(monkeypatch, tmp_path) -> None:
+    """Sous-titres traduits = un bloc par unité ~phrase (façon film), pas
+    d'animation mot par mot."""
     monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
     calls: list[str] = []
 
@@ -32,7 +31,7 @@ def test_translate_transcript_replaces_text_as_a_block_per_segment(monkeypatch, 
     out = translate_transcript(_en_transcript(), "fr", model="llama3")
     assert out.language == "fr"
     assert [s.text for s in out.segments] == ["Bonjour à tous.", "Ceci est un test."]
-    assert out.words == []  # pas de mots -> build_ass bascule en lignes par segment
+    assert out.words == []  # pas de mots -> build_ass bascule en lignes par bloc
     assert "français" in calls[0]
 
     # 2e appel : servi depuis le cache disque, pas de nouvel appel LLM.
@@ -40,6 +39,31 @@ def test_translate_transcript_replaces_text_as_a_block_per_segment(monkeypatch, 
     again = translate_transcript(_en_transcript(), "fr", model="llama3")
     assert [s.text for s in again.segments] == ["Bonjour à tous.", "Ceci est un test."]
     assert calls == []
+
+
+def test_translate_transcript_splits_a_segment_by_real_word_timing(monkeypatch, tmp_path) -> None:
+    """Un segment Whisper qui couvre plusieurs phrases est redécoupé en unités
+    ~phrases, chacune portée sur sa fenêtre `[premier mot, dernier mot]` réelle —
+    plus de bloc qui déborde sur les silences ni de fragment en avance."""
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+    words = [
+        Word(0.0, 0.4, "Hello"), Word(0.4, 0.9, "there."),
+        # ~2 s de silence : la 2e phrase ne doit PAS commencer avant
+        Word(3.0, 3.3, "This"), Word(3.3, 3.5, "is"), Word(3.5, 3.7, "a"),
+        Word(3.7, 4.3, "longer"), Word(4.3, 5.0, "sentence."),
+    ]
+    seg = TranscriptSegment(0.0, 8.0, "Hello there. This is a longer sentence.", words)
+    tr = Transcript(language="en", duration=8.0, model="t", segments=[seg])
+
+    monkeypatch.setattr(
+        llm, "chat_json",
+        lambda *a, **k: {"t": ["Bonjour toi.", "Ceci est une phrase plus longue."]},
+    )
+
+    out = translate_transcript(tr, "fr", model="llama3")
+    assert [s.text for s in out.segments] == ["Bonjour toi.", "Ceci est une phrase plus longue."]
+    assert (out.segments[0].start, out.segments[0].end) == (0.0, 0.9)
+    assert (out.segments[1].start, out.segments[1].end) == (3.0, 5.0)   # pas 0.9 -> 8.0
 
 
 def test_translate_transcript_noops_without_model_or_same_language() -> None:
@@ -100,11 +124,11 @@ def test_translate_transcript_recovers_items_dropped_from_a_batch(monkeypatch, t
     assert [s.text for s in out.segments] == ["FR0", "FR-solo"]
 
 
-def test_translate_transcript_only_translates_segments_within_windows(
+def test_translate_transcript_only_translates_units_within_windows(
     monkeypatch, tmp_path,
 ) -> None:
-    """Optimisation perf : ne traduire que les segments qui chevauchent une fenêtre
-    réellement exportée, pas tout le transcript d'une longue vidéo source."""
+    """Perf : ne traiter que les segments qui chevauchent un clip exporté ; les
+    autres n'apparaissent pas dans le transcript traduit (jamais rendus)."""
     monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
     seen: list[str] = []
 
@@ -117,6 +141,6 @@ def test_translate_transcript_only_translates_segments_within_windows(
     out = translate_transcript(
         _en_transcript(), "fr", model="llama3", windows=[(0.0, 2.0)],
     )
-    assert [s.text for s in out.segments] == ["Bonjour à tous.", "This is a test."]
+    assert [s.text for s in out.segments] == ["Bonjour à tous."]
+    assert (out.segments[0].start, out.segments[0].end) == (0.0, 2.0)
     assert len(seen) == 1 and "Hello everyone." in seen[0]
-    assert out.segments[1].words != []  # segment hors fenêtre : jamais envoyé, jamais touché
