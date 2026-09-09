@@ -113,6 +113,26 @@ mode d'apparition (mot actif, karaoké, mot par mot, ligne par ligne), majuscule
 
 Sur GPU NVIDIA, la transcription utilise CUDA (`float16`) ; sinon elle bascule sur le CPU (`int8`).
 
+### Longues vidéos bruyantes (rediff de live)
+
+Sur un VOD de plusieurs heures où la voix se mêle au son du jeu / aux alertes, la
+transcription peut dériver, décaler ou sauter des passages. Les réglages par défaut
+sont calibrés pour ça :
+
+- **pipeline batché** (faster-whisper) : le VAD découpe d'abord en énoncés, chacun
+  transcrit indépendamment → pas de dérive qui s'accumule sur la durée ;
+- `condition_on_previous_text` **désactivé** : une fenêtre ratée n'empoisonne plus
+  les suivantes (fin des boucles / répétitions) ;
+- **seuils assouplis** (`no_speech_threshold`, VAD) : la parole faible sous le bruit
+  n'est plus jetée comme « silence » ;
+- **pré-nettoyage audio** avant Whisper (`highpass` + `afftdn` + `dynaudnorm`,
+  ~0 VRAM) — désactivable avec `CLIP_CREATOR_WHISPER_AUDIO_CLEAN=0`.
+
+Variables d'environnement : `CLIP_CREATOR_WHISPER_MODEL` (ex. `large-v3` complet,
+plus robuste que `large-v3-turbo` sur audio dégradé — tient sur 8 Go de VRAM en
+`int8_float16` si Ollama n'est pas chargé en même temps), `CLIP_CREATOR_WHISPER_BATCH`
+(taille de lot, 8 par défaut ; baisser si mémoire GPU limitée).
+
 ### Sous-titres dans une autre langue
 
 Menu **« Langue des sous-titres »** : *Auto* (langue parlée, comportement par défaut)

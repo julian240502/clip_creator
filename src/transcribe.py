@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -20,8 +21,46 @@ from pathlib import Path
 
 from src.paths import TRANSCRIPTIONS_DIR
 
-DEFAULT_MODEL = "large-v3-turbo"
+# Modèle Whisper. `large-v3-turbo` par défaut (rapide) ; `large-v3` complet est
+# plus robuste sur audio bruité / timestamps — activable sans toucher au code.
+DEFAULT_MODEL = os.environ.get("CLIP_CREATOR_WHISPER_MODEL", "").strip() or "large-v3-turbo"
 ProgressCallback = Callable[[float, str], None]
+
+# Réglages calibrés pour du long-form bruité (rediff de live : voix + son du jeu +
+# alertes + musique). Voir README « Sous-titres incrustés ».
+_VAD_PARAMETERS = {
+    "threshold": 0.35,               # garde la parole plus faible sous le son du jeu
+    "min_silence_duration_ms": 350,  # ne recolle pas par-dessus les vraies pauses
+    "min_speech_duration_ms": 120,
+    "speech_pad_ms": 200,
+}
+# Sur un mix voix + jeu la confiance du modèle baisse : sans assouplir ces seuils,
+# des segments entiers sont jetés comme « pas de parole » (sous-titres manquants).
+_DECODE_OPTIONS = {
+    "word_timestamps": True,
+    "vad_filter": True,
+    "vad_parameters": _VAD_PARAMETERS,
+    "no_speech_threshold": 0.4,
+    "log_prob_threshold": -1.2,
+    # Pas de conditionnement sur le texte précédent : sur une longue vidéo bruitée
+    # une fenêtre ratée empoisonne toutes les suivantes (dérive + boucles).
+    "condition_on_previous_text": False,
+}
+_BATCH_SIZE = max(1, int(os.environ.get("CLIP_CREATOR_WHISPER_BATCH", "8") or "8"))
+
+# Pré-nettoyage de l'audio avant Whisper : coupe le grave, atténue le bruit
+# stationnaire, égalise les niveaux. ~0 VRAM. CLIP_CREATOR_WHISPER_AUDIO_CLEAN=0
+# pour désactiver.
+_AUDIO_CLEAN_FILTER = "highpass=f=70,afftdn=nf=-20,dynaudnorm=f=150:g=12"
+
+# Bump -> invalide les transcripts en cache produits avec d'anciens réglages.
+_PIPELINE_VERSION = "2"
+
+
+def _audio_clean_enabled() -> bool:
+    return os.environ.get("CLIP_CREATOR_WHISPER_AUDIO_CLEAN", "1").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
 
 
 @dataclass(frozen=True)
@@ -112,9 +151,28 @@ def _resolve_backend() -> tuple[str, str]:
     return "cpu", "int8"
 
 
+def _run_transcription(whisper, wav_path: str, language: str | None):
+    """Transcrit `wav_path`. Pipeline **batché** d'abord : le VAD découpe en énoncés
+    et chacun est décodé indépendamment → pas de dérive cumulée sur une longue
+    vidéo. Repli sur le mode séquentiel si le batché échoue (indispo, VRAM…).
+    """
+    opts = {"language": language, **_DECODE_OPTIONS}
+    try:
+        from faster_whisper import BatchedInferencePipeline
+
+        batched = BatchedInferencePipeline(model=whisper)
+        return batched.transcribe(wav_path, batch_size=_BATCH_SIZE, **opts)
+    except Exception:  # noqa: BLE001 - batché absent / OOM -> séquentiel, plus sobre
+        return whisper.transcribe(wav_path, **opts)
+
+
 def _source_key(video_path: Path, model: str, language: str | None) -> str:
     stat = video_path.stat()
-    raw = f"{video_path.name}|{stat.st_size}|{int(stat.st_mtime)}|{model}|{language or 'auto'}"
+    clean = "c" if _audio_clean_enabled() else "r"
+    raw = (
+        f"{video_path.name}|{stat.st_size}|{int(stat.st_mtime)}|{model}|"
+        f"{language or 'auto'}|v{_PIPELINE_VERSION}{clean}"
+    )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -122,8 +180,10 @@ def _extract_audio(video_path: Path, out_wav: Path) -> None:
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000",
-        "-c:a", "pcm_s16le", str(out_wav),
     ]
+    if _audio_clean_enabled():
+        command += ["-af", _AUDIO_CLEAN_FILTER]
+    command += ["-c:a", "pcm_s16le", str(out_wav)]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "Extraction audio impossible.")
@@ -206,9 +266,7 @@ def transcribe(
         report(0.15, f"Chargement du modèle {model} ({device})…")
         whisper = _load_model(model, device, compute_type)
         report(0.25, "Transcription en cours…")
-        segment_iter, info = whisper.transcribe(
-            str(wav), language=language, word_timestamps=True, vad_filter=True,
-        )
+        segment_iter, info = _run_transcription(whisper, str(wav), language)
         segments: list[TranscriptSegment] = []
         for segment in segment_iter:
             words = [
