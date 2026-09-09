@@ -115,9 +115,14 @@ Sur GPU NVIDIA, la transcription utilise CUDA (`float16`) ; sinon elle bascule s
 
 ### Longues vidéos bruyantes (rediff de live)
 
-Sur un VOD de plusieurs heures où la voix se mêle au son du jeu / aux alertes, la
-transcription peut dériver, décaler ou sauter des passages. Les réglages par défaut
-sont calibrés pour ça :
+Le curseur **« Portion à analyser »** (sélection intelligente) ou **« Portion à
+clipper »** (mode régulier) limite aussi la **transcription** : sur une rediff de
+5 h dont on ne garde que 30 min, seule cette fenêtre est extraite et transcrite —
+pas les 5 h. Les horodatages restent dans le temps absolu de la source.
+
+Sur un VOD où la voix se mêle au son du jeu / aux alertes, la transcription peut
+dériver, décaler ou sauter des passages. Les réglages par défaut sont calibrés
+pour ça :
 
 - **pipeline batché** (faster-whisper) : le VAD découpe d'abord en énoncés, chacun
   transcrit indépendamment → pas de dérive qui s'accumule sur la durée ;

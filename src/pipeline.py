@@ -161,8 +161,9 @@ def process_video(
         source = source_dir / incoming.name
         shutil.copy2(incoming, source)
     resolved_encoder = resolve_video_encoder(encoder)
+    src_duration = get_video_duration(source)
     window_start, window_end = resolve_source_window(
-        get_video_duration(source), source_start, source_end
+        src_duration, source_start, source_end
     )
     transcript = None
     if transcribe or captions_style is not None:
@@ -170,8 +171,12 @@ def process_video(
         from src.transcribe import transcribe as run_transcription
 
         report(0.15, "Transcription de la vidéo…")
+        # Ne transcrire que la portion traitée (rediff de plusieurs heures).
+        sub = None
+        if window_start > 0.5 or window_end < src_duration - 0.5:
+            sub = (window_start, window_end)
         transcript = run_transcription(
-            source, model=transcribe_model,
+            source, model=transcribe_model, clip_range=sub,
             progress=lambda value, message: report(0.15 + 0.08 * value, message),
         )
         dump_transcript(transcript, project_dir / "transcript.json")

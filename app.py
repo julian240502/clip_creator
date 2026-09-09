@@ -172,7 +172,9 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         media = download_source(source["ref"], SOURCE_CACHE_DIR, max_height=max_h)
     else:
         media = source["path"]
-    transcript = transcribe(media, cache_dir=session_dir())
+    # Ne transcrire que la portion analysée : sur une rediff de 5 h dont on ne
+    # garde que 30 min, transcrire tout le fichier prend une éternité.
+    transcript = transcribe(media, cache_dir=session_dir(), clip_range=source_window)
     model = pick_model() if ollama_available() else None
     found = find_highlights(
         transcript, target_count=target_count,

@@ -166,21 +166,30 @@ def _run_transcription(whisper, wav_path: str, language: str | None):
         return whisper.transcribe(wav_path, **opts)
 
 
-def _source_key(video_path: Path, model: str, language: str | None) -> str:
+def _source_key(
+    video_path: Path, model: str, language: str | None,
+    clip_range: tuple[float, float] | None = None,
+) -> str:
     stat = video_path.stat()
     clean = "c" if _audio_clean_enabled() else "r"
+    window = f"|{clip_range[0]:.1f}-{clip_range[1]:.1f}" if clip_range else ""
     raw = (
         f"{video_path.name}|{stat.st_size}|{int(stat.st_mtime)}|{model}|"
-        f"{language or 'auto'}|v{_PIPELINE_VERSION}{clean}"
+        f"{language or 'auto'}|v{_PIPELINE_VERSION}{clean}{window}"
     )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _extract_audio(video_path: Path, out_wav: Path) -> None:
-    command = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000",
-    ]
+def _extract_audio(
+    video_path: Path, out_wav: Path, *, start: float | None = None, end: float | None = None,
+) -> None:
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    if start is not None and start > 0:
+        command += ["-ss", f"{start:.3f}"]           # seek rapide avant -i
+    command += ["-i", str(video_path)]
+    if end is not None and (start is None or end > start):
+        command += ["-t", f"{end - (start or 0.0):.3f}"]
+    command += ["-vn", "-ac", "1", "-ar", "16000"]
     if _audio_clean_enabled():
         command += ["-af", _AUDIO_CLEAN_FILTER]
     command += ["-c:a", "pcm_s16le", str(out_wav)]
@@ -238,16 +247,24 @@ def transcribe(
     language: str | None = None,
     cache_dir: str | Path | None = None,
     cache: bool = True,
+    clip_range: tuple[float, float] | None = None,
     progress: ProgressCallback | None = None,
 ) -> Transcript:
-    """Transcrit une vidéo en mots horodatés. Résultat mis en cache par source."""
+    """Transcrit une vidéo en mots horodatés. Résultat mis en cache par source.
+
+    `clip_range` (start, end) en secondes : ne transcrit **que** cette portion —
+    indispensable sur une rediff de plusieurs heures dont on n'analyse qu'un
+    extrait. Les horodatages renvoyés restent dans le temps absolu de la source.
+    """
     source = Path(video_path)
     if not source.is_file():
         raise FileNotFoundError(f"Vidéo introuvable : {source}")
+    if clip_range is not None and clip_range[1] <= clip_range[0]:
+        clip_range = None
     report = progress or (lambda _value, _message: None)
     cache_root = Path(cache_dir or TRANSCRIPTIONS_DIR)
     cache_root.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_root / f"{_source_key(source, model, language)}.json"
+    cache_file = cache_root / f"{_source_key(source, model, language, clip_range)}.json"
     if cache and cache_file.is_file():
         report(1.0, "Transcription réutilisée depuis le cache.")
         return load_transcript(cache_file)
@@ -258,10 +275,13 @@ def transcribe(
             "Installez-le avec : pip install -r requirements-transcribe.txt"
         )
 
+    offset = clip_range[0] if clip_range else 0.0
     with tempfile.TemporaryDirectory() as tmp:
         wav = Path(tmp) / "audio.wav"
         report(0.05, "Extraction de l'audio…")
-        _extract_audio(source, wav)
+        start = clip_range[0] if clip_range else None
+        end = clip_range[1] if clip_range else None
+        _extract_audio(source, wav, start=start, end=end)
         device, compute_type = _resolve_backend()
         report(0.15, f"Chargement du modèle {model} ({device})…")
         whisper = _load_model(model, device, compute_type)
@@ -270,14 +290,14 @@ def transcribe(
         segments: list[TranscriptSegment] = []
         for segment in segment_iter:
             words = [
-                Word(start=float(word.start), end=float(word.end), text=word.word)
+                Word(start=float(word.start) + offset, end=float(word.end) + offset, text=word.word)
                 for word in (segment.words or [])
                 if word.start is not None and word.end is not None
             ]
             segments.append(
                 TranscriptSegment(
-                    start=float(segment.start),
-                    end=float(segment.end),
+                    start=float(segment.start) + offset,
+                    end=float(segment.end) + offset,
                     text=segment.text.strip(),
                     words=words,
                 )
@@ -286,7 +306,7 @@ def transcribe(
 
     transcript = Transcript(
         language=info.language,
-        duration=float(info.duration),
+        duration=float(info.duration) + offset,
         model=model,
         segments=segments,
     )

@@ -65,6 +65,70 @@ def test_source_key_depends_on_audio_clean(sample_video: Path, monkeypatch) -> N
     assert _source_key(sample_video, "tiny", None) != with_clean
 
 
+def test_source_key_depends_on_clip_range(sample_video: Path) -> None:
+    whole = _source_key(sample_video, "tiny", None)
+    part = _source_key(sample_video, "tiny", None, (100.0, 130.0))
+    other = _source_key(sample_video, "tiny", None, (200.0, 230.0))
+    assert whole != part != other and part != other
+
+
+def test_extract_audio_seeks_and_limits_for_a_clip_range(monkeypatch, tmp_path: Path) -> None:
+    seen: dict[str, list[str]] = {}
+
+    def fake_run(cmd, *a, **k):
+        seen["cmd"] = cmd
+        class R:
+            returncode = 0
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(transcribe_mod.subprocess, "run", fake_run)
+    _extract_audio(Path("v.mp4"), tmp_path / "o.wav", start=3600.0, end=3630.0)
+    cmd = seen["cmd"]
+    assert "-ss" in cmd and cmd[cmd.index("-ss") + 1] == "3600.000"
+    assert "-t" in cmd and cmd[cmd.index("-t") + 1] == "30.000"
+
+
+def test_transcribe_with_clip_range_offsets_timestamps_to_absolute(
+    sample_video: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    """Sur une portion analysée, on ne transcrit que l'extrait mais les
+    horodatages renvoyés sont recalés dans le temps absolu de la source."""
+    if not transcription_available():
+        pytest.skip("faster-whisper non installé")
+
+    monkeypatch.setattr(transcribe_mod, "_extract_audio", lambda *a, **k: None)
+    monkeypatch.setattr(transcribe_mod, "_resolve_backend", lambda: ("cpu", "int8"))
+    monkeypatch.setattr(transcribe_mod, "_load_model", lambda *a, **k: object())
+
+    class W:
+        def __init__(self, s, e, txt):
+            self.start, self.end, self.word = s, e, txt
+
+    class Seg:
+        def __init__(self):
+            self.start, self.end, self.text = 1.0, 2.5, "salut"
+            self.words = [W(1.0, 1.4, "sa"), W(1.4, 2.5, "lut")]
+
+    class Info:
+        language = "fr"
+        duration = 30.0
+
+    monkeypatch.setattr(
+        transcribe_mod, "_run_transcription", lambda *a, **k: (iter([Seg()]), Info()),
+    )
+
+    tr = transcribe(
+        sample_video, model="tiny", cache_dir=tmp_path, cache=False,
+        clip_range=(3600.0, 3630.0),
+    )
+    assert tr.segments[0].start == pytest.approx(3601.0)
+    assert tr.segments[0].end == pytest.approx(3602.5)
+    assert tr.segments[0].words[0].start == pytest.approx(3601.0)
+    assert tr.segments[0].words[-1].end == pytest.approx(3602.5)
+    assert tr.duration == pytest.approx(3630.0)
+
+
 def test_extract_audio_applies_clean_filter_when_enabled(monkeypatch, tmp_path: Path) -> None:
     seen: dict[str, list[str]] = {}
 
