@@ -230,6 +230,37 @@ def test_find_highlights_source_window_too_tight_returns_nothing() -> None:
     ) == []
 
 
+def test_find_highlights_seeds_a_window_from_a_chat_spike() -> None:
+    """Un pic de chat crée un extrait autour de cet instant et le signale."""
+    spike_t = 48.0
+    result = find_highlights(
+        _transcript(), target_count=6, min_duration=18.0, max_duration=45.0,
+        chat_spikes=[(spike_t, 4.5)],
+    )
+    covering = [h for h in result if h.start <= spike_t <= h.end]
+    assert covering, "le pic de chat doit être couvert par un extrait"
+    assert any("chat" in r.lower() for h in covering for r in h.reasons)
+
+
+def test_find_highlights_audio_intensity_lifts_the_hot_window() -> None:
+    """Une fenêtre bruyante (rires / cris) est mieux notée qu'à texte égal sans."""
+    hop = 0.5
+    quiet = [0.1] * int(70 / hop)
+    loud = list(quiet)
+    for i in range(int(44 / hop), int(54 / hop)):     # ~10 s de fort vers 44-54 s
+        loud[i] = 0.97
+
+    plain = find_highlights(_transcript(), min_duration=18.0, max_duration=45.0)
+    boosted = find_highlights(
+        _transcript(), min_duration=18.0, max_duration=45.0,
+        audio_curve=(loud, hop, 0.0),
+    )
+    hot = [h for h in boosted if h.start <= 48.0 <= h.end]
+    assert hot
+    assert any("intensité" in r.lower() or "🔊" in r for h in hot for r in h.reasons)
+    assert max(h.score for h in boosted) >= max(h.score for h in plain)
+
+
 _RAW = (
     "mal du coup avec du recul tu en as quels souvenirs mais franchement "
     "c'est quand même une belle période parce que quand tu as 15 ans tu te dis"
@@ -272,6 +303,19 @@ def test_find_highlights_empty_transcript() -> None:
 def test_ollama_available_is_false_when_nothing_listens() -> None:
     assert llm.ollama_available("http://127.0.0.1:1", timeout=0.3) is False
     assert llm.pick_model("http://127.0.0.1:1") is None
+
+
+def test_pick_rating_model_prefers_a_small_model_then_falls_back(monkeypatch) -> None:
+    monkeypatch.delenv("CLIP_CREATOR_RATING_MODEL", raising=False)
+
+    monkeypatch.setattr(llm, "list_models", lambda *a, **k: ["qwen2.5:7b", "qwen2.5:3b"])
+    assert llm.pick_rating_model() == "qwen2.5:3b"          # petit modèle choisi
+
+    monkeypatch.setattr(llm, "list_models", lambda *a, **k: ["qwen2.5:7b", "mistral:latest"])
+    assert llm.pick_rating_model() == "qwen2.5:7b"          # aucun petit -> pick_model
+
+    monkeypatch.setenv("CLIP_CREATOR_RATING_MODEL", "phi3:mini")
+    assert llm.pick_rating_model() == "phi3:mini"           # forcé par env
 
 
 def test_chat_json_parses_ollama_response(monkeypatch) -> None:

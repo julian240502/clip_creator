@@ -38,6 +38,12 @@ def test_transcription_available_returns_bool() -> None:
     assert isinstance(transcription_available(), bool)
 
 
+def test_unload_models_clears_the_cache() -> None:
+    transcribe_mod._models[("x", "cpu", "int8")] = object()
+    transcribe_mod.unload_models()
+    assert transcribe_mod._models == {}
+
+
 def test_extract_audio_is_16k_mono_wav(sample_video: Path, tmp_path: Path) -> None:
     wav = tmp_path / "audio.wav"
     _extract_audio(sample_video, wav)

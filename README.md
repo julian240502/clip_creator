@@ -90,9 +90,34 @@ Chaque extrait est aussi jaugé sur son **accroche** (les toutes premières seco
 qui ouvrent fort portent un badge **⚡ Accroche forte** et affichent la phrase d'accroche.
 Le hook ne filtre rien et ne change pas le classement — il ne fait que mettre en avant.
 
+### Signaux non textuels (rires / cris / chat)
+
+En plus du texte, deux signaux d'intensité entrent dans le score :
+
+- **Enveloppe de volume** (`ffmpeg` + `numpy`) : les rires, cris et moments de hype
+  se traduisent par des pics de volume et des transitions silence→explosion. Les
+  passages intenses sont bonifiés et portent un **🔊 Pic d'intensité**. Marche
+  aussi sur les fichiers importés.
+- **Chat Twitch** (rediff uniquement, via `chat-downloader`) — **désactivé par
+  défaut** : `chat-downloader` peut se bloquer très longtemps sur les gros streams
+  (rate-limit Twitch). Activer avec **`CLIP_CREATOR_ENABLE_CHAT=1`**. Une fois
+  activé : quand le débit de messages dépasse nettement sa base locale — surtout
+  en emotes de rire (KEKW, OMEGALUL…) — c'est un **moment potentiellement viral** ;
+  ces instants (recalés du délai de réaction du chat) **créent une fenêtre
+  candidate** et portent un **⚡ Le chat s'emballe**. Le téléchargement tourne
+  dans un thread **abandonné au bout de 90 s** s'il traîne (l'analyse continue
+  sans le chat).
+
 L'écran « moments détectés » liste les extraits classés par score ; on coche ceux à
-produire et seuls ceux-là sont rendus (sous-titres compris). Le modèle Ollama est choisi
-automatiquement (`qwen2.5` > `llama3.1` > `llama3` > `mistral` > …).
+produire et seuls ceux-là sont rendus (sous-titres compris).
+
+**Rapidité de l'analyse.** La fenêtre est téléchargée en **basse déf (480p)** — l'analyse
+ne lit que l'audio + des vignettes ; la génération, elle, retéléchargera en pleine
+qualité. Juste avant la notation, le **modèle Whisper est déchargé de la VRAM** pour ne
+pas étouffer Ollama sur une carte de 8 Go. La notation utilise un **petit modèle** s'il
+y en a un d'installé (`qwen2.5:3b`, `llama3.2:3b`, `gemma2:2b`… — bien plus rapide, et
+noter la viralité n'a pas besoin d'un gros modèle) ; sinon repli sur le modèle habituel
+(`qwen2.5` > `llama3.1` > `llama3` > …). `CLIP_CREATOR_RATING_MODEL` force le choix.
 
 ## Sous-titres incrustés (optionnel)
 
