@@ -98,12 +98,15 @@ En plus du texte, deux signaux d'intensité entrent dans le score :
   se traduisent par des pics de volume et des transitions silence→explosion. Les
   passages intenses sont bonifiés et portent un **🔊 Pic d'intensité**. Marche
   aussi sur les fichiers importés.
-- **Chat Twitch** (rediff uniquement, via `chat-downloader`) : quand le débit de
-  messages dépasse nettement sa base locale — surtout en emotes de rire
-  (KEKW, OMEGALUL…) — c'est un **moment potentiellement viral**. Ces instants
-  (recalés du délai de réaction du chat) **créent une fenêtre candidate** même si
-  le texte seul ne l'aurait pas retenue, et portent un **⚡ Le chat s'emballe**.
-  Sur une portion analysée, seul le chat de cette fenêtre est téléchargé.
+- **Chat Twitch** (rediff uniquement, via `chat-downloader`) — **désactivé par
+  défaut** : `chat-downloader` peut se bloquer très longtemps sur les gros streams
+  (rate-limit Twitch). Activer avec **`CLIP_CREATOR_ENABLE_CHAT=1`**. Une fois
+  activé : quand le débit de messages dépasse nettement sa base locale — surtout
+  en emotes de rire (KEKW, OMEGALUL…) — c'est un **moment potentiellement viral** ;
+  ces instants (recalés du délai de réaction du chat) **créent une fenêtre
+  candidate** et portent un **⚡ Le chat s'emballe**. Le téléchargement tourne
+  dans un thread **abandonné au bout de 90 s** s'il traîne (l'analyse continue
+  sans le chat).
 
 L'écran « moments détectés » liste les extraits classés par score ; on coche ceux à
 produire et seuls ceux-là sont rendus (sous-titres compris).

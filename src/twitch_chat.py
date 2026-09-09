@@ -17,10 +17,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 # Le chat d'un très gros stream (Kai Cenat & co) = centaines de milliers de
-# messages sur 20 min, et `chat-downloader` pagine (rate-limit Twitch). On borne :
-# c'est un signal statistique, un échantillon représentatif suffit. Une coupure
-# au temps ne couvre que le début de la fenêtre — monter
-# CLIP_CREATOR_CHAT_MAX_SECONDS pour aller plus loin, ou CLIP_CREATOR_DISABLE_CHAT=1.
+# messages, et `chat-downloader` pagine (rate-limit Twitch) — voire se bloque en
+# boucle de retry. Ce signal est **désactivé par défaut** (CLIP_CREATOR_ENABLE_CHAT=1
+# pour l'activer) et l'appelant l'exécute dans un thread borné. Ici on borne aussi :
+# échantillon représentatif suffit. CLIP_CREATOR_CHAT_MAX_SECONDS pour aller plus loin.
 _CHAT_MAX_SECONDS = float(os.environ.get("CLIP_CREATOR_CHAT_MAX_SECONDS", "75") or 75)
 _CHAT_MAX_MESSAGES = int(os.environ.get("CLIP_CREATOR_CHAT_MAX_MESSAGES", "150000") or 150000)
 
@@ -60,8 +60,6 @@ def download_chat(
             return [(float(t), str(m)) for t, m in data]
         except (OSError, ValueError):
             pass
-    if os.environ.get("CLIP_CREATOR_DISABLE_CHAT", "").strip().lower() in {"1", "true", "on"}:
-        return None
     try:
         from chat_downloader import ChatDownloader
     except ImportError:
@@ -70,17 +68,21 @@ def download_chat(
     truncated = False
     out: list[tuple[float, str]] = []
     try:
+        # `timeout` (inactivité) + `max_attempts` : `chat-downloader` doit finir
+        # par rendre la main même si Twitch rate-limite (sinon boucle de retry
+        # infinie). L'appelant l'exécute en plus dans un thread borné.
         chat = ChatDownloader().get_chat(
             url, message_types=["text_message"], start_time=start, end_time=end,
-            max_messages=_CHAT_MAX_MESSAGES,
+            max_messages=_CHAT_MAX_MESSAGES, timeout=20, max_attempts=2,
+            retry_timeout=15,
         )
         for msg in chat:
             t = msg.get("time_in_seconds")
             text = msg.get("message") or ""
             if t is not None and text:
                 out.append((float(t), str(text)))
-            if len(out) % 500 == 0 and time.monotonic() > deadline:
-                truncated = True   # échantillon suffisant, on arrête là
+            if time.monotonic() > deadline:
+                truncated = True
                 break
     except Exception:  # noqa: BLE001 - réseau / VOD sans chat / API changée
         if not out:

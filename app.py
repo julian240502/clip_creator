@@ -241,16 +241,30 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
     _done("Enveloppe audio")
 
     chat_spikes = None
-    if source["kind"] == "url":
+    _chat_on = os.environ.get("CLIP_CREATOR_ENABLE_CHAT", "").strip().lower() in {"1", "true", "on"}
+    if _chat_on and source["kind"] == "url":
         from src.twitch_chat import chat_spikes as _compute_spikes
         from src.twitch_chat import download_chat, is_twitch_vod
 
         if is_twitch_vod(source["ref"]):
             _start = source_window[0] if source_window else None
             _end = source_window[1] if source_window else None
-            _msgs = download_chat(source["ref"], session_dir(), start=_start, end=_end)
+            # `chat-downloader` peut se bloquer indéfiniment (retry Twitch) : on
+            # l'exécute dans un thread qu'on abandonne au bout de 90 s.
+            _box: dict = {}
+            _th = threading.Thread(
+                target=lambda: _box.setdefault(
+                    "msgs", download_chat(source["ref"], session_dir(), start=_start, end=_end),
+                ),
+                daemon=True,
+            )
+            _th.start()
+            _th.join(timeout=90)
+            if _th.is_alive() and progress:
+                progress("Chat Twitch : trop lent, abandonné — on continue sans")
+            _msgs = _box.get("msgs")
             chat_spikes = _compute_spikes(_msgs) if _msgs else None
-    _done("Chat Twitch")
+    _done("Chat Twitch" if _chat_on else "Chat Twitch (désactivé)")
 
     found = find_highlights(
         transcript, target_count=target_count,
