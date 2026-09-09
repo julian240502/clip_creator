@@ -173,6 +173,52 @@ def test_process_video_ranged_download_rebases_clip_windows(
     assert rendered and rendered[0][0] == pytest.approx(1.0, abs=0.05)  # 3601 - 3600
 
 
+def test_process_video_smart_downloads_each_clip_window_not_the_whole_portion(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Sélection intelligente + transcript de l'analyse : un téléchargement par
+    fenêtre de clip (± marge), pas toute l'heure analysée."""
+    from src import pipeline
+    from src.transcribe import Transcript, TranscriptSegment, Word
+
+    monkeypatch.setattr(pipeline, "DATA_DIR", str(tmp_path))
+
+    ranges: list[tuple[float, float]] = []
+
+    def fake_range(url, root, start, end, max_height=1080):
+        ranges.append((start, end))
+        return str(tmp_path / "seg.mp4")
+
+    monkeypatch.setattr("src.downloader.download_source_range", fake_range)
+    monkeypatch.setattr(pipeline, "download_source", lambda *a, **k: pytest.fail("full DL"))
+    monkeypatch.setattr(pipeline, "get_video_duration", lambda _p: 40.0)
+
+    renders: list[tuple[float, float]] = []
+
+    def fake_resize(media, output, **k):
+        renders.append((k["start"], k["duration"]))
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_bytes(b"x")
+        return Path(output)
+
+    monkeypatch.setattr(pipeline, "resize_clip_for_vertical", fake_resize)
+
+    tr = Transcript(
+        language="en", duration=3700.0, model="x",
+        segments=[TranscriptSegment(100.0, 101.0, "hi", [Word(100.0, 101.0, "hi")])],
+    )
+    _pd, clips = pipeline.process_video(
+        url="https://host.test/v/1", vertical=True, encoder="cpu",
+        export_quality="720p", encoding_speed="fast",
+        source_start=600.0, source_end=4200.0, source_duration=46800.0,
+        clips_windows=[(700.0, 730.0), (3000.0, 3040.0)],
+        pretranscript=tr,
+    )
+    assert len(clips) == 2
+    assert ranges == [(694.0, 736.0), (2994.0, 3046.0)]     # ± _CLIP_DL_PAD (6 s)
+    assert len(renders) == 2
+
+
 def test_split_video_is_precise(sample_video: Path, tmp_path: Path) -> None:
     clips = split_video(sample_video, 2, tmp_path / "clips", encoder="cpu")
     assert len(clips) == 2

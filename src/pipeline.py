@@ -23,9 +23,14 @@ from src.video_splitter import (
 
 if TYPE_CHECKING:
     from src.captions import CaptionStyle
+    from src.transcribe import Transcript
 
 ProgressCallback = Callable[[float, str], None]
 ClipCallback = Callable[[Path], None]
+
+# Marge (s) autour d'une fenêtre de clip lors du téléchargement par extrait :
+# absorbe le recul à l'image-clé et laisse un pré-roll.
+_CLIP_DL_PAD = 6.0
 
 
 def _project_name(name: str) -> str:
@@ -93,6 +98,104 @@ def _make_crop_cmd(track, source_w, source_h, frame_w, frame_h, out_path, *, win
     return write_sendcmd(out_path, path)
 
 
+def _generate_from_clip_windows(
+    *, project_dir: Path, url: str, quality, frame_w: int, frame_h: int, export_format: str,
+    encoder: str, encoding_speed: str, vertical_background: str,
+    split_layout: SplitLayout | None, captions_style, caption_lang: str | None,
+    transcript: Transcript, clips_windows: list[tuple[float, float]],
+    generate_meta: bool, meta_model: str | None,
+    clips_hints: list[tuple[str, str]] | None, video_title: str | None,
+    report, notify_clip,
+) -> tuple[Path, list[Path]]:
+    """Sélection intelligente : télécharge **chaque fenêtre de clip** séparément
+    (au lieu de toute la portion analysée) et rend depuis ces extraits. Le
+    transcript vient de l'analyse — pas de re-téléchargement ni re-transcription
+    de l'heure entière.
+    """
+    from src.downloader import download_source_range
+
+    resolved_encoder = resolve_video_encoder(encoder)
+    windows = sorted((float(s), float(e)) for s, e in clips_windows if e > s)
+
+    if captions_style is not None and caption_lang and transcript.words:
+        from dataclasses import replace as _replace
+
+        from src.captions import font_for_language
+        from src.transcribe import dump_transcript
+        from src.translate import language_supported, translate_transcript
+
+        target = caption_lang.lower()
+        spoken = (transcript.language or "")[:2]
+        if language_supported(target) and target != spoken:
+            model = meta_model
+            if model is None:
+                from src.llm import ollama_available, pick_model
+
+                model = pick_model() if ollama_available() else None
+            if model is not None:
+                report(0.15, f"Traduction des sous-titres → {target}…")
+                transcript = translate_transcript(
+                    transcript, target, model, windows=windows,
+                    debug_out=project_dir / f"translation.{target}.txt",
+                )
+                lang_font = font_for_language(target)
+                if lang_font:
+                    captions_style = _replace(captions_style, font=lang_font)
+        dump_transcript(transcript, project_dir / f"transcript.{target}.json")
+
+    reframe = vertical_background == "reframe"
+    vertical_dir, exports = project_dir / "vertical", []
+    report(0.2, f"Rendu de {len(windows)} clip(s) via {encoder_label(resolved_encoder)}…")
+    for index, (clip_start, clip_end) in enumerate(windows):
+        report(0.2 + 0.75 * index / max(len(windows), 1), f"Clip {index + 1}/{len(windows)}…")
+        dl_from = max(0.0, clip_start - _CLIP_DL_PAD)
+        media = Path(download_source_range(
+            url, SOURCE_CACHE_DIR, dl_from, clip_end + _CLIP_DL_PAD,
+            max_height=quality.source_max_height,
+        ))
+        lead = get_video_duration(media) - ((clip_end + _CLIP_DL_PAD) - dl_from)
+        media_t0 = dl_from - (lead if 0.0 < lead < 30.0 else 0.0)
+        local_start = max(0.0, clip_start - media_t0)
+
+        output = vertical_dir / f"clip_{index + 1:03d}.mp4"
+        clip_captions = None
+        if captions_style is not None:
+            from src.captions import write_clip_captions
+
+            clip_captions = write_clip_captions(
+                transcript, output.with_suffix(".ass"),
+                clip_start=clip_start, clip_end=clip_end,
+                width=frame_w, height=frame_h, style=captions_style,
+            )
+        crop_cmd = None
+        if reframe:
+            from src.reframe import detect_face_track, reframe_available
+
+            src_w, src_h = get_video_resolution(media)
+            track = detect_face_track(media) if reframe_available() else None
+            crop_cmd = _make_crop_cmd(
+                track, src_w, src_h, frame_w, frame_h, output.with_suffix(".cmd"),
+                win_start=local_start, win_end=local_start + (clip_end - clip_start),
+            )
+
+        clip_path = resize_clip_for_vertical(
+            media, output, encoder=encoder, encoding_speed=encoding_speed,
+            quality=quality.key, aspect=export_format, background=vertical_background,
+            start=local_start, duration=clip_end - clip_start,
+            captions_file=clip_captions, crop_cmd_file=crop_cmd, split_layout=split_layout,
+        )
+        exports.append(clip_path)
+        notify_clip(clip_path)
+
+    if generate_meta and transcript.words:
+        report(0.96, "Titres & hashtags…")
+        _write_metadata_files(
+            exports, windows, transcript, meta_model, clips_hints, video_title or "",
+        )
+    report(1.0, "Exports terminés")
+    return project_dir, exports
+
+
 def _write_metadata_files(exports, windows, transcript, model, hints, video_title="") -> None:
     from src.metadata import generate_metadata, write_metadata
 
@@ -121,6 +224,7 @@ def process_video(
     source_end: float | None = None,
     source_duration: float | None = None,
     clips_windows: list[tuple[float, float]] | None = None,
+    pretranscript: Transcript | None = None,
     transcribe: bool = False,
     transcribe_model: str = DEFAULT_MODEL,
     captions_style: CaptionStyle | None = None,
@@ -149,6 +253,27 @@ def process_video(
     source_dir.mkdir(parents=True, exist_ok=False)
     quality = get_quality_preset(export_quality)
     frame_w, frame_h = frame_size(export_quality, export_format)
+
+    # Sélection intelligente + transcript déjà calculé à l'analyse : on télécharge
+    # chaque fenêtre de clip séparément, pas toute la portion (une heure de VOD
+    # pour n'en garder que quelques minutes = interminable).
+    if url and clips_windows and pretranscript is not None and vertical:
+        if transcribe or captions_style is not None:
+            from src.transcribe import dump_transcript
+
+            dump_transcript(pretranscript, project_dir / "transcript.json")
+        return _generate_from_clip_windows(
+            project_dir=project_dir, url=url, quality=quality,
+            frame_w=frame_w, frame_h=frame_h, export_format=export_format,
+            encoder=encoder, encoding_speed=encoding_speed,
+            vertical_background=vertical_background, split_layout=split_layout,
+            captions_style=captions_style, caption_lang=caption_lang,
+            transcript=pretranscript, clips_windows=clips_windows,
+            generate_meta=generate_meta, meta_model=meta_model,
+            clips_hints=clips_hints, video_title=video_title,
+            report=report, notify_clip=notify_clip,
+        )
+
     rebase = 0.0
     if url:
         want_range = (

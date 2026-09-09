@@ -164,7 +164,7 @@ def reset_source() -> None:
         "source", "clips", "clips_meta", "_zip_cache", "project_dir", "captions_skipped",
         "style_preview", "style_preview_sig", "preview_at", "split_preview",
         "highlights", "highlights_model", "source_lang", "export_label",
-        "chat_spikes", "chat_requested",
+        "chat_spikes", "chat_requested", "analysis_transcript",
     ):
         st.session_state.pop(key, None)
     _forget_send_selection()
@@ -308,6 +308,9 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         data["thumb"] = _highlight_thumb(media, middle, thumbs_dir / f"hl_{index:02d}.jpg")
         items.append(data)
     _done("Vignettes")
+    # Réutilisé à la génération : évite de re-télécharger + re-transcrire la
+    # portion entière (voir process_video / _generate_from_clip_windows).
+    st.session_state["analysis_transcript"] = transcript
     return items, model, transcript.language
 
 
@@ -1427,6 +1430,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             source_end=window[1],
             source_duration=source.get("duration"),
             clips_windows=clips_windows,
+            pretranscript=st.session_state.get("analysis_transcript") if clips_windows else None,
             captions_style=captions_style,
             caption_lang=st.session_state.get("caption_lang"),
             generate_meta=meta_on,

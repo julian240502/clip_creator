@@ -115,9 +115,12 @@ En plus du texte, deux signaux d'intensité entrent dans le score :
 L'écran « moments détectés » liste les extraits classés par score ; on coche ceux à
 produire et seuls ceux-là sont rendus (sous-titres compris).
 
-**Rapidité de l'analyse.** La fenêtre est téléchargée en **basse déf (480p)** — l'analyse
-ne lit que l'audio + des vignettes ; la génération, elle, retéléchargera en pleine
-qualité. Juste avant la notation, le **modèle Whisper est déchargé de la VRAM** pour ne
+**Rapidité.** L'analyse télécharge la fenêtre en **basse déf (480p)** — elle ne lit que
+l'audio + des vignettes. La **génération** ne retélécharge alors **que chaque fenêtre de
+clip** (± quelques secondes de marge), en pleine qualité, et **réutilise le transcript de
+l'analyse** — plus de re-téléchargement + re-transcription de l'heure entière pour n'en
+garder que quelques minutes. Juste avant la notation, le **modèle Whisper est déchargé
+de la VRAM** pour ne
 pas étouffer Ollama sur une carte de 8 Go. La notation utilise un **petit modèle** s'il
 y en a un d'installé (`qwen2.5:3b`, `llama3.2:3b`, `gemma2:2b`… — bien plus rapide, et
 noter la viralité n'a pas besoin d'un gros modèle) ; sinon repli sur le modèle habituel
