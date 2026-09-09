@@ -117,7 +117,10 @@ qualité. Juste avant la notation, le **modèle Whisper est déchargé de la VRA
 pas étouffer Ollama sur une carte de 8 Go. La notation utilise un **petit modèle** s'il
 y en a un d'installé (`qwen2.5:3b`, `llama3.2:3b`, `gemma2:2b`… — bien plus rapide, et
 noter la viralité n'a pas besoin d'un gros modèle) ; sinon repli sur le modèle habituel
-(`qwen2.5` > `llama3.1` > `llama3` > …). `CLIP_CREATOR_RATING_MODEL` force le choix.
+(`qwen2.5:7b` > `qwen2.5` > `llama3.1` > `llama3` > …). `CLIP_CREATOR_RATING_MODEL`
+force le modèle de notation ; `CLIP_CREATOR_LLM_MODEL` force celui de la traduction /
+des titres (qui, lui, prend le plus **gros** qwen installé — `qwen2.5:7b` avant
+`qwen2.5:3b`).
 
 ## Sous-titres incrustés (optionnel)
 

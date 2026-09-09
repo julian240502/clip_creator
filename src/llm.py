@@ -12,8 +12,13 @@ import urllib.error
 import urllib.request
 
 DEFAULT_HOST = "http://localhost:11434"
-# Ordre de préférence : meilleur suivi de consignes / JSON / français en tête.
-_MODEL_PREFERENCE = ("qwen2.5", "llama3.1", "llama3", "mistral", "gemma2", "phi3", "llama2")
+# Ordre de préférence pour traduction / titres : gros modèles en tête (finesse
+# FR + suivi de consignes). Les variantes explicites passent AVANT `qwen2.5`
+# générique, sinon Ollama peut renvoyer `qwen2.5:3b` avant `qwen2.5:7b`.
+_MODEL_PREFERENCE = (
+    "qwen2.5:72b", "qwen2.5:32b", "qwen2.5:14b", "qwen2.5:7b", "qwen2.5",
+    "llama3.1", "llama3", "mistral", "gemma2", "phi3", "llama2",
+)
 # Notation des extraits : score + titre court -> un petit modèle suffit et tient
 # en VRAM à côté de Whisper (bien plus rapide sur carte serrée).
 _RATING_PREFERENCE = (
@@ -61,7 +66,12 @@ def list_models(host: str = DEFAULT_HOST, timeout: float = 3.0) -> list[str]:
 
 
 def pick_model(host: str = DEFAULT_HOST) -> str | None:
-    """Choisit un modèle installé, en suivant l'ordre de préférence."""
+    """Modèle pour la **traduction / les titres** : `CLIP_CREATOR_LLM_MODEL` force
+    le choix, sinon on suit l'ordre de préférence (variantes précises d'abord,
+    puis générique)."""
+    forced = os.environ.get("CLIP_CREATOR_LLM_MODEL", "").strip()
+    if forced:
+        return forced
     models = list_models(host)
     if not models:
         return None

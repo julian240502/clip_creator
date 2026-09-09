@@ -305,8 +305,22 @@ def test_ollama_available_is_false_when_nothing_listens() -> None:
     assert llm.pick_model("http://127.0.0.1:1") is None
 
 
+def test_pick_model_prefers_the_bigger_qwen_regardless_of_list_order(monkeypatch) -> None:
+    monkeypatch.delenv("CLIP_CREATOR_LLM_MODEL", raising=False)
+    # Ollama renvoie souvent le dernier modèle pull en tête -> le 3b avant le 7b.
+    monkeypatch.setattr(llm, "list_models", lambda *a, **k: ["qwen2.5:3b", "qwen2.5:7b"])
+    assert llm.pick_model() == "qwen2.5:7b"
+
+    monkeypatch.setattr(llm, "list_models", lambda *a, **k: ["qwen2.5:3b", "mistral:latest"])
+    assert llm.pick_model() == "qwen2.5:3b"                 # pas de 7b -> qwen2.5 générique
+
+    monkeypatch.setenv("CLIP_CREATOR_LLM_MODEL", "mistral:latest")
+    assert llm.pick_model() == "mistral:latest"             # forcé par env
+
+
 def test_pick_rating_model_prefers_a_small_model_then_falls_back(monkeypatch) -> None:
     monkeypatch.delenv("CLIP_CREATOR_RATING_MODEL", raising=False)
+    monkeypatch.delenv("CLIP_CREATOR_LLM_MODEL", raising=False)
 
     monkeypatch.setattr(llm, "list_models", lambda *a, **k: ["qwen2.5:7b", "qwen2.5:3b"])
     assert llm.pick_rating_model() == "qwen2.5:3b"          # petit modèle choisi
