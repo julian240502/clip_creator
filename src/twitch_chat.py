@@ -10,9 +10,17 @@ de rire — et on renvoie des instants (déjà corrigés du délai de réaction 
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import urlparse
+
+# Le chat d'un stream très actif se compte en dizaines de milliers de messages et
+# `chat-downloader` pagine lentement (rate-limit Twitch). On borne : c'est un
+# signal statistique, un échantillon représentatif suffit. Réglable par env.
+_CHAT_MAX_SECONDS = float(os.environ.get("CLIP_CREATOR_CHAT_MAX_SECONDS", "75") or 75)
+_CHAT_MAX_MESSAGES = int(os.environ.get("CLIP_CREATOR_CHAT_MAX_MESSAGES", "40000") or 40000)
 
 # Emotes / expressions de rire les plus courantes sur Twitch (+ « clip it »).
 _LAUGH_RE = re.compile(
@@ -50,30 +58,41 @@ def download_chat(
             return [(float(t), str(m)) for t, m in data]
         except (OSError, ValueError):
             pass
+    if os.environ.get("CLIP_CREATOR_DISABLE_CHAT", "").strip().lower() in {"1", "true", "on"}:
+        return None
     try:
         from chat_downloader import ChatDownloader
     except ImportError:
         return None
+    deadline = time.monotonic() + _CHAT_MAX_SECONDS
+    truncated = False
+    out: list[tuple[float, str]] = []
     try:
         chat = ChatDownloader().get_chat(
             url, message_types=["text_message"], start_time=start, end_time=end,
+            max_messages=_CHAT_MAX_MESSAGES,
         )
-        out: list[tuple[float, str]] = []
         for msg in chat:
             t = msg.get("time_in_seconds")
             text = msg.get("message") or ""
             if t is not None and text:
                 out.append((float(t), str(text)))
+            if len(out) % 500 == 0 and time.monotonic() > deadline:
+                truncated = True   # échantillon suffisant, on arrête là
+                break
     except Exception:  # noqa: BLE001 - réseau / VOD sans chat / API changée
-        return None
+        if not out:
+            return None
+        truncated = True
     if not out:
         return None
     out.sort(key=lambda item: item[0])
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        pass
+    if not truncated:  # un échantillon partiel n'est pas remis en cache
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
     return out
 
 

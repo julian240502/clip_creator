@@ -27,8 +27,8 @@ def loudness_curve(media_path: str, *, hop: float = 0.5) -> tuple[list[float], f
         "-f", "s16le", "-",
     ]
     try:
-        raw = subprocess.run(cmd, capture_output=True, check=True).stdout
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        raw = subprocess.run(cmd, capture_output=True, check=True, timeout=600).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return None
     if not raw:
         return None
