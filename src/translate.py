@@ -7,11 +7,12 @@ d'abord redécoupé en unités ~phrases via le minutage réel des mots
 (`src.highlights._sentence_units`) ; chaque phrase traduite s'affiche ensuite sur
 sa propre fenêtre `[premier mot, dernier mot]`, en bloc.
 
-Avant traduction : on **nettoie** les annotations non parlées (`[Music]`, `(rires)`,
-`♪`), on **fusionne** les micro-unités collées (« Ouais. » + phrase suivante), et
-on donne au modèle la **durée à l'écran** de chaque réplique (pour qu'il condense
-si besoin) ainsi que la **réplique précédente** en contexte (cohérence des
-pronoms / temps).
+Avant traduction : on **nettoie** les annotations non parlées connues
+(`[Music]`, `(rires)`, `♪` — sans jamais supprimer de vraie parole entre
+parenthèses), on **fusionne** les micro-unités collées, et on donne au modèle la
+**durée à l'écran** + la **réplique précédente** en contexte. La consigne
+privilégie la **fidélité** : garder tous les éléments concrets cités (noms,
+chiffres, marques, lieux), ne raccourcir que les hésitations.
 """
 
 from __future__ import annotations
@@ -40,8 +41,16 @@ _LANG_NAMES = {
 }
 _BATCH = 12
 
-# Annotations non parlées émises par Whisper.
-_ANNOTATION_RE = re.compile(r"[\[(][^\])]*[\])]|[♪♫♬🎵🎶]+|\bBLANK_AUDIO\b", re.IGNORECASE)
+# Annotations non parlées connues (liste blanche : on ne supprime PAS n'importe
+# quel texte entre parenthèses — un aparté du streamer doit être conservé).
+_ANNOTATION_RE = re.compile(
+    r"[\[(]\s*(?:music|musique|song|applause|applaudissements|cheer(?:s|ing)?|"
+    r"laugh(?:s|ing|ter)?|rires?|sighs?|soupirs?|coughs?|toux|gasps?|"
+    r"background\s+(?:noise|music)|bruit\s+de\s+fond|crosstalk|inaudible|"
+    r"indistinct|silence|blank[_ ]audio|no\s+audio|pas\s+de\s+son)\s*[\])]"
+    r"|[♪♫♬🎵🎶]+",
+    re.IGNORECASE,
+)
 _HAS_LETTER_RE = re.compile(r"[^\W\d_]", re.UNICODE)
 
 # Fusion des micro-unités : trou court + résultat qui reste court et bref.
@@ -55,8 +64,11 @@ def language_supported(code: str | None) -> bool:
 
 
 def _clean_unit_text(text: str) -> str:
-    """Retire les annotations non parlées ; renvoie « » si rien de lexical ne reste."""
+    """Retire les annotations non parlées **connues**. Une parenthèse contenant de
+    la vraie parole est conservée (on enlève juste les crochets). « » si rien de
+    lexical ne reste."""
     text = _ANNOTATION_RE.sub(" ", text)
+    text = re.sub(r"[\[\]()]", "", text)  # crochets résiduels -> on garde le contenu
     text = re.sub(r"\s+", " ", text).strip(" -–—*·_~")
     return text if _HAS_LETTER_RE.search(text) else ""
 
@@ -85,17 +97,22 @@ def _system_prompt(target_name: str) -> str:
     return (
         f"Tu traduis des sous-titres vidéo en {target_name}. On te donne une liste "
         "numérotée de répliques successives d'un même dialogue : garde pronoms, "
-        "temps et vocabulaire cohérents d'une réplique à l'autre. Chaque réplique "
-        "indique entre parenthèses sa durée à l'écran ; si la traduction ne s'y lit "
-        "pas confortablement (~15 caractères par seconde), condense-la sans perdre "
-        "le sens. Réponds UNIQUEMENT en JSON "
+        "temps et vocabulaire cohérents d'une réplique à l'autre.\n"
+        "FIDÉLITÉ AVANT TOUT : traduis chaque réplique intégralement, en gardant "
+        "TOUS les éléments concrets (noms de personnes, marques, lieux, chiffres, "
+        "titres de jeux, faits précis). Ne raccourcis QUE les hésitations et "
+        "répétitions ('euh', 'genre', mots répétés). Une ligne un peu dense vaut "
+        "mieux qu'une information perdue. La durée entre parenthèses est indicative.\n"
+        "Si un terme d'argot / de jeu / une expression anglaise n'a pas "
+        "d'équivalent courant, garde-le tel quel plutôt que d'inventer.\n"
+        "Réponds UNIQUEMENT en JSON "
         '{"t": ["<traduction 0>", "<traduction 1>", ...]} — exactement le même '
         "nombre d'éléments, même ordre, sans fusionner ni ajouter de répliques."
     )
 
 
 def _cache_path(texts: list[str], model: str, target: str) -> Path:
-    raw = f"{target}|{model}|v3|{'|'.join(texts)}"
+    raw = f"{target}|{model}|v4|{'|'.join(texts)}"
     key = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
     return Path(TRANSCRIPTIONS_DIR) / f"tr_{target}_{key}.json"
 
@@ -164,6 +181,24 @@ def _translate_segments(
     return out
 
 
+def _format_seconds(value: float) -> str:
+    total = int(value)
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def _dump_pairs(path: Path, units: list[_Unit], translations: list[str]) -> None:
+    """Écrit `[m:ss] VO -> traduction` par unité, pour vérifier la fidélité à l'œil."""
+    lines = [
+        f"[{_format_seconds(u.start)}] {u.text}\n        -> {t.strip()}"
+        for u, t in zip(units, translations, strict=False)
+    ]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def translate_transcript(
     transcript: Transcript,
     target: str,
@@ -171,6 +206,7 @@ def translate_transcript(
     *,
     cache: bool = True,
     windows: list[tuple[float, float]] | None = None,
+    debug_out: Path | str | None = None,
 ) -> Transcript:
     """Transcript où chaque **unité ~phrase** utile est traduite en `target`.
 
@@ -226,6 +262,9 @@ def translate_transcript(
         if cache:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(translations, ensure_ascii=False), encoding="utf-8")
+
+    if debug_out is not None:
+        _dump_pairs(Path(debug_out), units, translations)
 
     segments = [
         TranscriptSegment(start=unit.start, end=unit.end, text=text.strip(), words=[])

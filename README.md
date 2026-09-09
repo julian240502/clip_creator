@@ -151,15 +151,20 @@ longue vidéo), puis :
   via le minutage réel des mots, et chaque phrase traduite s'affiche sur sa fenêtre
   `[premier mot, dernier mot]`. Un bloc unique couvrant plusieurs phrases débordait
   sur les silences et les fragments dérivaient ; ce n'est plus le cas ;
-- avant traduction : les **annotations non parlées** (`[Music]`, `(rires)`, `♪`)
-  sont retirées, et les **micro-unités collées** (« Ouais. » + phrase suivante)
-  sont fusionnées pour ne pas flasher seules ;
-- le modèle reçoit la **durée à l'écran** de chaque réplique (il condense si la
-  traduction ne s'y lit pas ~15 car./s) et la **réplique précédente** en contexte
-  (pronoms / temps cohérents) ;
+- avant traduction : seules les **annotations non parlées connues** (`[Music]`,
+  `(rires)`, `♪`…) sont retirées — un aparté du streamer entre parenthèses est
+  conservé — et les **micro-unités collées** sont fusionnées pour ne pas flasher ;
+- consigne au modèle : **fidélité avant tout** — garder tous les éléments concrets
+  (noms, marques, lieux, chiffres, titres de jeux), ne raccourcir que les
+  hésitations ; garder un terme d'argot / une expression anglaise tel quel s'il n'a
+  pas d'équivalent courant. La durée à l'écran et la réplique précédente sont
+  fournies en contexte ;
 - un lot mal répondu est retenté par plus petits lots, puis segment par segment,
   avant d'être laissé en VO (un modèle local renvoie parfois un tableau JSON
-  incomplet).
+  incomplet) ;
+- un fichier **`translation.<langue>.txt`** est écrit dans le dossier du projet :
+  `[m:ss] VO -> traduction` par phrase, pour vérifier à l'œil ce que Whisper a
+  entendu et comment ça a été traduit.
 
 Le texte traduit n'a pas de minutage mot à mot (l'audio est dans une autre langue) :
 affichage **en bloc** par unité, sans mode mot par mot / karaoké. Pour le chinois /

@@ -233,7 +233,10 @@ def process_video(
                     # régulier) : traduire tout le transcript d'une longue vidéo
                     # pour n'en garder qu'une poignée de clips est inutilement long.
                     needed = clips_windows or [(window_start, window_end)]
-                    transcript = translate_transcript(transcript, target, model, windows=needed)
+                    transcript = translate_transcript(
+                        transcript, target, model, windows=needed,
+                        debug_out=project_dir / f"translation.{target}.txt",
+                    )
                     lang_font = font_for_language(target)
                     if lang_font:
                         captions_style = _replace(captions_style, font=lang_font)

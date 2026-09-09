@@ -131,8 +131,18 @@ def test_translate_transcript_recovers_items_dropped_from_a_batch(monkeypatch, t
 def test_clean_unit_text_strips_non_spoken_annotations() -> None:
     assert _clean_unit_text("[Music]") == ""
     assert _clean_unit_text("♪♪") == ""
-    assert _clean_unit_text("(rires) c'est fou") == "c'est fou"
+    assert _clean_unit_text("[ Background noise ]") == ""
+    assert _clean_unit_text("(laughter) c'est fou") == "c'est fou"
     assert _clean_unit_text("Bonjour tout le monde.") == "Bonjour tout le monde."
+
+
+def test_clean_unit_text_keeps_real_words_inside_parentheses() -> None:
+    """Un aparté du streamer entre parenthèses n'est PAS une annotation : on garde
+    la parole, on enlève juste les crochets."""
+    assert _clean_unit_text("he said (and I mean it) the game is rigged") == (
+        "he said and I mean it the game is rigged"
+    )
+    assert _clean_unit_text("(my brother's name is Kevin)") == "my brother's name is Kevin"
 
 
 def test_merge_short_units_glues_a_flash_to_the_next_line() -> None:
@@ -195,6 +205,20 @@ def test_translate_batch_prompt_carries_duration_and_context(monkeypatch, tmp_pa
     assert "(0.6s) Phrase0." in bodies[0]           # durée à l'écran dans le corps
     assert "Contexte déjà dit" not in bodies[0]     # 1er lot : pas de contexte
     assert "Contexte déjà dit" in bodies[1]         # 2e lot : réplique précédente
+
+
+def test_translate_transcript_writes_a_debug_pairs_file(monkeypatch, tmp_path) -> None:
+    """`debug_out` -> un fichier VO / traduction pour vérifier la fidélité."""
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        llm, "chat_json",
+        lambda *a, **k: {"t": ["Bonjour à tous.", "Ceci est un test."]},
+    )
+    out = tmp_path / "translation.fr.txt"
+    translate_transcript(_en_transcript(), "fr", model="llama3", debug_out=out)
+    text = out.read_text(encoding="utf-8")
+    assert "Hello everyone." in text and "-> Bonjour à tous." in text
+    assert "[0:00]" in text
 
 
 def test_translate_transcript_only_translates_units_within_windows(
