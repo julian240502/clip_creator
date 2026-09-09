@@ -162,19 +162,50 @@ def _highlight_thumb(media: str, at: float, out: Path) -> str | None:
     return None
 
 
+def _shift_transcript(transcript, delta: float):
+    """Recale un transcript 0-basé (extrait) dans le temps absolu de la source."""
+    if not delta:
+        return transcript
+    from src.transcribe import Transcript, TranscriptSegment, Word
+
+    return Transcript(
+        language=transcript.language, duration=transcript.duration + delta,
+        model=transcript.model,
+        segments=[
+            TranscriptSegment(
+                start=seg.start + delta, end=seg.end + delta, text=seg.text,
+                words=[Word(w.start + delta, w.end + delta, w.text) for w in seg.words],
+            )
+            for seg in transcript.segments
+        ],
+    )
+
+
 def analyse_highlights(source: dict, quality_key: str, target_count: int,
                        dur_min: float, dur_max: float,
                        source_window: tuple[float, float] | None = None,
                        ) -> tuple[list[dict], str | None, str]:
     """Télécharge (si URL), transcrit, note les moments et en extrait une vignette."""
-    if source["kind"] == "url":
-        max_h = get_quality_preset(quality_key).source_max_height
+    max_h = get_quality_preset(quality_key).source_max_height
+    thumb_offset = 0.0
+    if source["kind"] == "url" and source_window:
+        # Ne télécharger QUE la fenêtre analysée : une rediff de 5 h = ~30 Go,
+        # inutile pour 30 min d'analyse. Le fichier est 0-basé -> on recale après.
+        from src.downloader import download_source_range
+
+        media = download_source_range(
+            source["ref"], SOURCE_CACHE_DIR, source_window[0], source_window[1], max_height=max_h,
+        )
+        transcript = _shift_transcript(
+            transcribe(media, cache_dir=session_dir()), source_window[0],
+        )
+        thumb_offset = source_window[0]
+    elif source["kind"] == "url":
         media = download_source(source["ref"], SOURCE_CACHE_DIR, max_height=max_h)
+        transcript = transcribe(media, cache_dir=session_dir())
     else:
         media = source["path"]
-    # Ne transcrire que la portion analysée : sur une rediff de 5 h dont on ne
-    # garde que 30 min, transcrire tout le fichier prend une éternité.
-    transcript = transcribe(media, cache_dir=session_dir(), clip_range=source_window)
+        transcript = transcribe(media, cache_dir=session_dir(), clip_range=source_window)
     model = pick_model() if ollama_available() else None
     found = find_highlights(
         transcript, target_count=target_count,
@@ -187,7 +218,7 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
     items = []
     for index, item in enumerate(found):
         data = asdict(item)
-        middle = (item.start + item.end) / 2
+        middle = (item.start + item.end) / 2 - thumb_offset
         data["thumb"] = _highlight_thumb(media, middle, thumbs_dir / f"hl_{index:02d}.jpg")
         items.append(data)
     return items, model, transcript.language
@@ -1151,6 +1182,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             split_layout=split_layout,
             source_start=window[0],
             source_end=window[1],
+            source_duration=source.get("duration"),
             clips_windows=clips_windows,
             captions_style=captions_style,
             caption_lang=st.session_state.get("caption_lang"),

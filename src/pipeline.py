@@ -119,6 +119,7 @@ def process_video(
     split_layout: SplitLayout | None = None,
     source_start: float | None = None,
     source_end: float | None = None,
+    source_duration: float | None = None,
     clips_windows: list[tuple[float, float]] | None = None,
     transcribe: bool = False,
     transcribe_model: str = DEFAULT_MODEL,
@@ -148,11 +149,33 @@ def process_video(
     source_dir.mkdir(parents=True, exist_ok=False)
     quality = get_quality_preset(export_quality)
     frame_w, frame_h = frame_size(export_quality, export_format)
+    rebase = 0.0
     if url:
-        report(0.08, f"Téléchargement de la vidéo · maximum {quality.label}…")
-        source = Path(
-            download_source(url, SOURCE_CACHE_DIR, max_height=quality.source_max_height)
+        want_range = (
+            source_start is not None and source_end is not None and source_end > source_start
+            and (source_start > 0.5
+                 or (source_duration is not None and source_end < source_duration - 0.5))
         )
+        if want_range:
+            from src.downloader import download_source_range
+
+            report(0.08, "Téléchargement de la portion sélectionnée…")
+            source = Path(download_source_range(
+                url, SOURCE_CACHE_DIR, source_start, source_end,
+                max_height=quality.source_max_height,
+            ))
+            # Le fichier téléchargé démarre à 0 : on ramène toutes les fenêtres
+            # dans ce référentiel local.
+            rebase = source_start
+            if clips_windows:
+                clips_windows = [(a - rebase, b - rebase) for a, b in clips_windows]
+            source_start = max(0.0, source_start - rebase)
+            source_end = source_end - rebase
+        else:
+            report(0.08, f"Téléchargement de la vidéo · maximum {quality.label}…")
+            source = Path(
+                download_source(url, SOURCE_CACHE_DIR, max_height=quality.source_max_height)
+            )
     else:
         report(0.08, "Préparation du fichier…")
         incoming = Path(uploaded_path)

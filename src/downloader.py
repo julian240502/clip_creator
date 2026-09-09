@@ -121,12 +121,62 @@ def download_source(video_url: str, cache_root: str | Path, max_height: int = 10
     ]
     if cached:
         return str(max(cached, key=lambda path: path.stat().st_size).resolve())
-    # Aucun fichier complet : purge les restes d'un téléchargement interrompu
-    # (`.part`, `.part-FragNNNN`, `.ytdl`) pour repartir proprement.
+    _clear_partial_downloads(bucket)
+    return download_video(url, bucket, max_height=max_height)
+
+
+def _clear_partial_downloads(bucket: Path) -> None:
+    """Purge les restes d'un téléchargement interrompu (`.part`, `.part-FragNNNN`,
+    `.ytdl`) pour repartir proprement."""
     for stale in bucket.iterdir():
         if stale.is_file() and (".part" in stale.name or stale.name.endswith(".ytdl")):
             stale.unlink(missing_ok=True)
-    return download_video(url, bucket, max_height=max_height)
+
+
+def download_source_range(
+    video_url: str, cache_root: str | Path, start: float, end: float, max_height: int = 1080,
+) -> str:
+    """Télécharge **seulement** `[start, end]` de la source (VOD de plusieurs heures
+    dont on n'analyse qu'un extrait) et met en cache par URL + qualité + fenêtre.
+
+    Le fichier renvoyé démarre à 0 : l'appelant décale ses horodatages de `start`
+    pour revenir au temps absolu de la source.
+    """
+    url = _validate_url(video_url)
+    if end <= start:
+        raise ValueError("La fin de la fenêtre doit être après le début.")
+    key = hashlib.sha1(
+        f"{url}|{max_height}|{start:.1f}|{end:.1f}".encode()
+    ).hexdigest()[:16]
+    bucket = Path(cache_root) / f"range_{key}"
+    bucket.mkdir(parents=True, exist_ok=True)
+    cached = [
+        path for path in bucket.iterdir()
+        if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}
+    ]
+    if cached:
+        return str(max(cached, key=lambda path: path.stat().st_size).resolve())
+    _clear_partial_downloads(bucket)
+    options = {
+        "format": _format_selector(max_height),
+        "merge_output_format": "mp4",
+        "outtmpl": str(bucket / "%(id)s.%(ext)s"),
+        "restrictfilenames": True,
+        "windowsfilenames": True,
+        "noplaylist": True,
+        "overwrites": False,
+        "quiet": True,
+        "no_warnings": True,
+        "download_ranges": lambda _info, _ydl: [
+            {"start_time": float(start), "end_time": float(end)}
+        ],
+        "force_keyframes_at_cuts": True,
+        **_client_opts(),
+    }
+    with YoutubeDL(options) as ydl:
+        if not ydl.extract_info(url, download=True):
+            raise RuntimeError("Aucune information vidéo reçue.")
+    return _newest_media(bucket)
 
 
 def download_clip(

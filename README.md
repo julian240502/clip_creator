@@ -116,9 +116,11 @@ Sur GPU NVIDIA, la transcription utilise CUDA (`float16`) ; sinon elle bascule s
 ### Longues vidéos bruyantes (rediff de live)
 
 Le curseur **« Portion à analyser »** (sélection intelligente) ou **« Portion à
-clipper »** (mode régulier) limite aussi la **transcription** : sur une rediff de
-5 h dont on ne garde que 30 min, seule cette fenêtre est extraite et transcrite —
-pas les 5 h. Les horodatages restent dans le temps absolu de la source.
+clipper »** (mode régulier) limite le **téléchargement** *et* la **transcription** :
+sur une rediff de 5 h (~30 Go) dont on ne garde que 30 min, yt-dlp ne télécharge
+que les fragments de cette fenêtre puis seule elle est transcrite. Les horodatages
+affichés restent dans le temps absolu de la source ; l'extrait téléchargé est mis
+en cache par URL + qualité + fenêtre.
 
 Sur un VOD où la voix se mêle au son du jeu / aux alertes, la transcription peut
 dériver, décaler ou sauter des passages. Les réglages par défaut sont calibrés

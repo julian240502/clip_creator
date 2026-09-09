@@ -96,6 +96,82 @@ def test_download_video_outtmpl_avoids_the_title(monkeypatch, tmp_path: Path) ->
     assert captured["options"]["restrictfilenames"] is True
 
 
+def test_download_source_range_downloads_only_the_window(monkeypatch, tmp_path: Path) -> None:
+    """Fenêtre analysée d'une rediff de 5 h : yt-dlp reçoit un download_ranges, et
+    le résultat est mis en cache par URL + qualité + fenêtre."""
+    from src.downloader import download_source_range
+
+    captured: dict[str, dict] = {}
+
+    class FakeYDL:
+        def __init__(self, options):
+            captured["options"] = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            out = Path(captured["options"]["outtmpl"].replace("%(id)s.%(ext)s", "v1.mp4"))
+            out.write_bytes(b"data" * 80)
+            return {"id": "v1"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    a = download_source_range("https://host.test/v/1", tmp_path, 12780.0, 14220.0, max_height=720)
+    ranges = captured["options"]["download_ranges"](None, None)
+    assert ranges == [{"start_time": 12780.0, "end_time": 14220.0}]
+    assert captured["options"]["force_keyframes_at_cuts"] is True
+    # 2e appel, même fenêtre -> cache (pas de nouveau téléchargement)
+    captured.clear()
+    b = download_source_range("https://host.test/v/1", tmp_path, 12780.0, 14220.0, max_height=720)
+    assert a == b and "options" not in captured
+    # fenêtre différente -> autre bucket
+    download_source_range("https://host.test/v/1", tmp_path, 0.0, 60.0, max_height=720)
+    assert captured["options"]["download_ranges"](None, None)[0]["end_time"] == 60.0
+
+
+def test_process_video_ranged_download_rebases_clip_windows(
+    sample_video: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    """URL + portion 1h00–1h00m10 : on télécharge la fenêtre (fichier 0-basé) et
+    les clips_windows absolus sont ramenés dans ce référentiel local."""
+    from src import pipeline
+
+    seen: dict[str, object] = {}
+
+    def fake_range(url, root, start, end, max_height=1080):
+        seen["range"] = (start, end)
+        return str(sample_video)
+
+    def fake_full(url, root, max_height=1080):
+        seen["full"] = True
+        return str(sample_video)
+
+    monkeypatch.setattr(pipeline, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("src.downloader.download_source_range", fake_range)
+    monkeypatch.setattr(pipeline, "download_source", fake_full)
+
+    rendered: list[tuple[float, float]] = []
+    real_resize = pipeline.resize_clip_for_vertical
+
+    def spy_resize(*a, **k):
+        rendered.append((k["start"], k["duration"]))
+        return real_resize(*a, **k)
+
+    monkeypatch.setattr(pipeline, "resize_clip_for_vertical", spy_resize)
+
+    pipeline.process_video(
+        url="https://host.test/v/1", vertical=True, encoder="cpu",
+        export_quality="720p", encoding_speed="fast",
+        source_start=3600.0, source_end=3610.0, source_duration=7200.0,
+        clips_windows=[(3601.0, 3603.0)],
+    )
+    assert seen.get("range") == (3600.0, 3610.0) and "full" not in seen
+    assert rendered and rendered[0][0] == pytest.approx(1.0, abs=0.05)  # 3601 - 3600
+
+
 def test_split_video_is_precise(sample_video: Path, tmp_path: Path) -> None:
     clips = split_video(sample_video, 2, tmp_path / "clips", encoder="cpu")
     assert len(clips) == 2
