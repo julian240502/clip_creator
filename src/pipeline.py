@@ -164,9 +164,12 @@ def process_video(
                 url, SOURCE_CACHE_DIR, source_start, source_end,
                 max_height=quality.source_max_height,
             ))
-            # Le fichier téléchargé démarre à 0 : on ramène toutes les fenêtres
-            # dans ce référentiel local.
-            rebase = source_start
+            # Coupe en copie de flux : le début a reculé à l'image-clé précédente
+            # (fichier un peu plus long). On ramène toutes les fenêtres dans ce
+            # référentiel local en tenant compte de cette marge.
+            want = source_end - source_start
+            lead = get_video_duration(source) - want
+            rebase = source_start - (lead if 0.0 < lead < 30.0 else 0.0)
             if clips_windows:
                 clips_windows = [(a - rebase, b - rebase) for a, b in clips_windows]
             source_start = max(0.0, source_start - rebase)

@@ -139,8 +139,9 @@ def download_source_range(
     """Télécharge **seulement** `[start, end]` de la source (VOD de plusieurs heures
     dont on n'analyse qu'un extrait) et met en cache par URL + qualité + fenêtre.
 
-    Le fichier renvoyé démarre à 0 : l'appelant décale ses horodatages de `start`
-    pour revenir au temps absolu de la source.
+    Le fichier renvoyé démarre à ~0 : l'appelant décale ses horodatages de `start`.
+    Coupe en **copie de flux** (rapide) : le début réel peut reculer jusqu'à
+    l'image-clé précédente (quelques secondes de marge), pas de ré-encodage.
     """
     url = _validate_url(video_url)
     if end <= start:
@@ -170,7 +171,9 @@ def download_source_range(
         "download_ranges": lambda _info, _ydl: [
             {"start_time": float(start), "end_time": float(end)}
         ],
-        "force_keyframes_at_cuts": True,
+        # PAS de force_keyframes_at_cuts : il force un ré-encodage CPU de toute la
+        # section (silencieux, ~20-40 min pour 25 min de 1080p60). La copie de
+        # flux suffit ici — la transcription et le rendu recadrent au besoin.
         **_client_opts(),
     }
     with YoutubeDL(options) as ydl:

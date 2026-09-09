@@ -190,16 +190,19 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
     thumb_offset = 0.0
     if source["kind"] == "url" and source_window:
         # Ne télécharger QUE la fenêtre analysée : une rediff de 5 h = ~30 Go,
-        # inutile pour 30 min d'analyse. Le fichier est 0-basé -> on recale après.
+        # inutile pour 30 min d'analyse. Le fichier est ~0-basé -> on recale après.
         from src.downloader import download_source_range
 
         media = download_source_range(
             source["ref"], SOURCE_CACHE_DIR, source_window[0], source_window[1], max_height=max_h,
         )
-        transcript = _shift_transcript(
-            transcribe(media, cache_dir=session_dir()), source_window[0],
-        )
-        thumb_offset = source_window[0]
+        # La coupe en copie de flux recule le début à l'image-clé précédente : le
+        # fichier est un peu plus long que demandé, on retranche cette marge.
+        want = source_window[1] - source_window[0]
+        lead = get_video_duration(media) - want
+        offset = source_window[0] - (lead if 0.0 < lead < 30.0 else 0.0)
+        transcript = _shift_transcript(transcribe(media, cache_dir=session_dir()), offset)
+        thumb_offset = offset
     elif source["kind"] == "url":
         media = download_source(source["ref"], SOURCE_CACHE_DIR, max_height=max_h)
         transcript = transcribe(media, cache_dir=session_dir())

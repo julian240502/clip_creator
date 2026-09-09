@@ -122,7 +122,8 @@ def test_download_source_range_downloads_only_the_window(monkeypatch, tmp_path: 
     a = download_source_range("https://host.test/v/1", tmp_path, 12780.0, 14220.0, max_height=720)
     ranges = captured["options"]["download_ranges"](None, None)
     assert ranges == [{"start_time": 12780.0, "end_time": 14220.0}]
-    assert captured["options"]["force_keyframes_at_cuts"] is True
+    # copie de flux, pas de ré-encodage forcé de toute la section
+    assert "force_keyframes_at_cuts" not in captured["options"]
     # 2e appel, même fenêtre -> cache (pas de nouveau téléchargement)
     captured.clear()
     b = download_source_range("https://host.test/v/1", tmp_path, 12780.0, 14220.0, max_height=720)
