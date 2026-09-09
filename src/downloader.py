@@ -89,7 +89,13 @@ def download_video(
     options = {
         "format": _format_selector(max_height),
         "merge_output_format": "mp4",
-        "outtmpl": str(destination / "%(title).120B [%(id)s].%(ext)s"),
+        # Nom de fichier = id de la vidéo (ASCII, court, stable). Le titre peut
+        # contenir des emoji / être très long : tronqué en octets il coupe un
+        # caractère multi-octets et yt-dlp ne retrouve plus ses fragments
+        # `.part-FragNNNN` sous Windows.
+        "outtmpl": str(destination / "%(id)s.%(ext)s"),
+        "restrictfilenames": True,
+        "windowsfilenames": True,
         "noplaylist": True,
         "overwrites": False,
         "quiet": True,
@@ -115,6 +121,11 @@ def download_source(video_url: str, cache_root: str | Path, max_height: int = 10
     ]
     if cached:
         return str(max(cached, key=lambda path: path.stat().st_size).resolve())
+    # Aucun fichier complet : purge les restes d'un téléchargement interrompu
+    # (`.part`, `.part-FragNNNN`, `.ytdl`) pour repartir proprement.
+    for stale in bucket.iterdir():
+        if stale.is_file() and (".part" in stale.name or stale.name.endswith(".ytdl")):
+            stale.unlink(missing_ok=True)
     return download_video(url, bucket, max_height=max_height)
 
 

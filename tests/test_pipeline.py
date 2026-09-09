@@ -47,6 +47,55 @@ def test_download_source_caches_by_url_and_quality(tmp_path: Path, monkeypatch) 
     assert len(calls) == 2
 
 
+def test_download_source_clears_stale_fragments_before_retry(tmp_path: Path, monkeypatch) -> None:
+    """Un téléchargement interrompu laisse des `.part` / `.part-FragNNNN` : on les
+    purge avant de relancer, sinon yt-dlp reprend sur un état cassé."""
+    import hashlib
+
+    key = hashlib.sha1(b"https://host.test/v/1|720").hexdigest()[:16]
+    bucket = tmp_path / key
+    bucket.mkdir()
+    (bucket / "vid.mp4.part").write_bytes(b"x")
+    (bucket / "vid.mp4.part-Frag2189").write_bytes(b"x")
+
+    def fake_download_video(video_url, output_dir, max_height=1080):
+        # à ce stade les restes doivent avoir disparu
+        assert not list(Path(output_dir).glob("*.part*"))
+        target = Path(output_dir) / "vid.mp4"
+        target.write_bytes(b"data" * 50)
+        return str(target)
+
+    monkeypatch.setattr(downloader, "download_video", fake_download_video)
+    out = download_source("https://host.test/v/1", tmp_path, max_height=720)
+    assert Path(out).name == "vid.mp4"
+
+
+def test_download_video_outtmpl_avoids_the_title(monkeypatch, tmp_path: Path) -> None:
+    """Le nom de fichier ne doit plus dépendre du titre (emoji / longueur → yt-dlp
+    perd ses fragments sous Windows)."""
+    captured: dict[str, dict] = {}
+
+    class FakeYDL:
+        def __init__(self, options):
+            captured["options"] = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            (tmp_path / "v123.mp4").write_bytes(b"data" * 50)
+            return {"id": "v123"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    downloader.download_video("https://host.test/v/1", tmp_path, max_height=720)
+    tmpl = captured["options"]["outtmpl"]
+    assert "%(title" not in tmpl and "%(id)s" in tmpl
+    assert captured["options"]["restrictfilenames"] is True
+
+
 def test_split_video_is_precise(sample_video: Path, tmp_path: Path) -> None:
     clips = split_video(sample_video, 2, tmp_path / "clips", encoder="cpu")
     assert len(clips) == 2
