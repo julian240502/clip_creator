@@ -188,8 +188,17 @@ def _shift_transcript(transcript, delta: float):
 def analyse_highlights(source: dict, quality_key: str, target_count: int,
                        dur_min: float, dur_max: float,
                        source_window: tuple[float, float] | None = None,
+                       progress=None,
                        ) -> tuple[list[dict], str | None, str]:
     """Télécharge (si URL), transcrit, note les moments et en extrait une vignette."""
+    _clock = [time.perf_counter()]
+
+    def _done(label: str) -> None:
+        now = time.perf_counter()
+        if progress:
+            progress(f"{label} : {now - _clock[0]:.0f} s")
+        _clock[0] = now
+
     thumb_offset = 0.0
     if source["kind"] == "url" and source_window:
         # Ne télécharger QUE la fenêtre analysée, en basse déf (audio + vignettes).
@@ -204,14 +213,17 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         want = source_window[1] - source_window[0]
         lead = get_video_duration(media) - want
         offset = source_window[0] - (lead if 0.0 < lead < 30.0 else 0.0)
+        _done("Téléchargement 480p")
         transcript = _shift_transcript(transcribe(media, cache_dir=session_dir()), offset)
         thumb_offset = offset
     elif source["kind"] == "url":
         media = download_source(source["ref"], SOURCE_CACHE_DIR, max_height=_ANALYSIS_MAX_HEIGHT)
+        _done("Téléchargement 480p")
         transcript = transcribe(media, cache_dir=session_dir())
     else:
         media = source["path"]
         transcript = transcribe(media, cache_dir=session_dir(), clip_range=source_window)
+    _done("Transcription")
 
     # Libère la VRAM de Whisper avant la notation : sinon il cohabite mal avec le
     # modèle Ollama sur une carte de 8 Go et la notation rame.
@@ -226,6 +238,7 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
 
     _curve = loudness_curve(media)
     audio_curve = (_curve[0], _curve[1], thumb_offset) if _curve else None
+    _done("Enveloppe audio")
 
     chat_spikes = None
     if source["kind"] == "url":
@@ -237,12 +250,14 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
             _end = source_window[1] if source_window else None
             _msgs = download_chat(source["ref"], session_dir(), start=_start, end=_end)
             chat_spikes = _compute_spikes(_msgs) if _msgs else None
+    _done("Chat Twitch")
 
     found = find_highlights(
         transcript, target_count=target_count,
         min_duration=float(dur_min), max_duration=float(dur_max), model=model,
         source_window=source_window, audio_curve=audio_curve, chat_spikes=chat_spikes,
     )
+    _done(f"Notation ({model or 'heuristique'})")
     thumbs_dir = session_dir() / "highlights"
     shutil.rmtree(thumbs_dir, ignore_errors=True)
     thumbs_dir.mkdir(parents=True, exist_ok=True)
@@ -252,6 +267,7 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         middle = (item.start + item.end) / 2 - thumb_offset
         data["thumb"] = _highlight_thumb(media, middle, thumbs_dir / f"hl_{index:02d}.jpg")
         items.append(data)
+    _done("Vignettes")
     return items, model, transcript.language
 
 
@@ -1019,19 +1035,25 @@ else:
     else:
         st.caption("Durée inconnue : toute la vidéo sera analysée.")
     if st.button("Analyser les moments", use_container_width=True):
-        with st.spinner("Analyse : téléchargement, transcription, notation…"):
+        with st.status("Analyse des moments…", expanded=True) as _status:
+            def _log(msg: str) -> None:
+                _status.write(f"⏱️ {msg}")
+                print(f"[analyse] {msg}", flush=True)
+
             try:
                 found, used, src_lang = analyse_highlights(
                     source, quality_key, target_count, dur_min, dur_max,
-                    source_window=smart_window,
+                    source_window=smart_window, progress=_log,
                 )
                 st.session_state["highlights"] = found
                 st.session_state["highlights_model"] = used
                 st.session_state["source_lang"] = src_lang
+                _status.update(label="Analyse terminée", state="complete", expanded=False)
                 if not found:
                     st.warning("Aucun moment exploitable détecté (pas de parole ?).")
             except Exception as exc:  # noqa: BLE001 - message affiché tel quel
                 st.session_state.pop("highlights", None)
+                _status.update(label="Analyse impossible", state="error")
                 st.error(f"Analyse impossible : {exc}")
 
 # Accélération matérielle détectée automatiquement (NVENC / Quick Sync / AMF / CPU).
