@@ -90,6 +90,21 @@ Chaque extrait est aussi jaugé sur son **accroche** (les toutes premières seco
 qui ouvrent fort portent un badge **⚡ Accroche forte** et affichent la phrase d'accroche.
 Le hook ne filtre rien et ne change pas le classement — il ne fait que mettre en avant.
 
+### Signaux non textuels (rires / cris / chat)
+
+En plus du texte, deux signaux d'intensité entrent dans le score :
+
+- **Enveloppe de volume** (`ffmpeg` + `numpy`) : les rires, cris et moments de hype
+  se traduisent par des pics de volume et des transitions silence→explosion. Les
+  passages intenses sont bonifiés et portent un **🔊 Pic d'intensité**. Marche
+  aussi sur les fichiers importés.
+- **Chat Twitch** (rediff uniquement, via `chat-downloader`) : quand le débit de
+  messages dépasse nettement sa base locale — surtout en emotes de rire
+  (KEKW, OMEGALUL…) — c'est un **moment potentiellement viral**. Ces instants
+  (recalés du délai de réaction du chat) **créent une fenêtre candidate** même si
+  le texte seul ne l'aurait pas retenue, et portent un **⚡ Le chat s'emballe**.
+  Sur une portion analysée, seul le chat de cette fenêtre est téléchargé.
+
 L'écran « moments détectés » liste les extraits classés par score ; on coche ceux à
 produire et seuls ceux-là sont rendus (sous-titres compris). Le modèle Ollama est choisi
 automatiquement (`qwen2.5` > `llama3.1` > `llama3` > `mistral` > …).

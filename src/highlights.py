@@ -235,6 +235,54 @@ def _pre_score(text: str, duration: float) -> float:
     return max(0.0, min(1.0, score))
 
 
+def _seed_windows_from_spikes(
+    units: list, spikes: list[tuple[float, float]], *,
+    min_dur: float, max_dur: float, existing: list[tuple[float, float, str]],
+) -> list[tuple[float, float, str]]:
+    """Fenêtres candidates ancrées sur les pics de chat pas déjà couverts par une
+    fenêtre existante — un moment où le chat explose devient un extrait même si
+    le texte, seul, ne l'aurait pas retenu."""
+    out: list[tuple[float, float, str]] = []
+    for spike_t, _intensity in spikes:
+        if any(s <= spike_t <= e for s, e, _ in existing + out):
+            continue
+        i = max((k for k in range(len(units)) if units[k].start <= spike_t + 0.5), default=0)
+        if _DANGLING_RE.match(units[i].text) and i + 1 < len(units):
+            i += 1
+        j = i
+        while j < len(units) and units[j].end - units[i].start < min_dur:
+            j += 1
+        if j >= len(units):
+            continue
+        while j + 1 < len(units) and units[j + 1].end - units[i].start <= max_dur * 0.9:
+            j += 1
+        start, end = units[i].start, units[j].end
+        if end - start < min_dur * 0.8:
+            continue
+        text = " ".join(units[k].text for k in range(i, j + 1)).strip()
+        out.append((round(start, 2), round(end, 2), text))
+    return out
+
+
+def _context_bonus(
+    start: float, end: float,
+    audio_curve: tuple[list[float], float, float] | None,
+    spikes: list[tuple[float, float]] | None,
+) -> tuple[float, float]:
+    """(énergie 0..1, chat 0..1) pour la fenêtre `[start, end]`."""
+    energy = 0.0
+    if audio_curve:
+        from src.audio_energy import excitement
+
+        values, hop, offset = audio_curve
+        energy = excitement(values, hop, start - offset, end - offset)
+    chat = 0.0
+    if spikes:
+        hits = [inten for t, inten in spikes if start - 2.0 <= t <= end]
+        chat = min(1.0, (max(hits) if hits else 0.0) / 3.0)
+    return energy, chat
+
+
 def _dedupe(
     scored: list[tuple[float, float, str, float]], overlap: float = 0.5,
 ) -> list[tuple[float, float, str, float]]:
@@ -409,12 +457,18 @@ def find_highlights(
     model: str | None = None,
     progress: ProgressCallback | None = None,
     source_window: tuple[float, float] | None = None,
+    audio_curve: tuple[list[float], float, float] | None = None,
+    chat_spikes: list[tuple[float, float]] | None = None,
 ) -> list[Highlight]:
     """Renvoie les meilleurs extraits, classés par score décroissant.
 
     `source_window` restreint les extraits candidats à `(start, end)` de la source
-    — pratique pour une rediff de live : on cadre sur la partie active et on
-    ignore les intros, pauses et écrans « je reviens ».
+    — pratique pour une rediff de live : on cadre sur la partie active.
+
+    `audio_curve` `(valeurs, hop, offset)` (voir `src.audio_energy`) et
+    `chat_spikes` `[(temps, intensité), …]` (voir `src.twitch_chat`) sont des
+    signaux **non textuels** : ils créent des fenêtres autour des pics de chat et
+    bonifient le score des passages intenses (rires, cris, chat qui s'emballe).
     """
     report = progress or (lambda _value, _message: None)
     language = transcript.language  # titres / résumés / hook dans la langue de la vidéo
@@ -424,13 +478,24 @@ def find_highlights(
 
     report(0.1, "Repérage des phrases…")
     raw = _candidate_windows(units, min_dur=min_duration, max_dur=max_duration)
+    if chat_spikes:
+        raw = raw + _seed_windows_from_spikes(
+            units, chat_spikes, min_dur=min_duration, max_dur=max_duration, existing=raw,
+        )
     if source_window is not None:
         w0, w1 = source_window
         raw = [(s, e, t) for (s, e, t) in raw if s >= w0 - 0.01 and e <= w1 + 0.01]
         if not raw:
             return []
-    scored = [(s, e, t, _pre_score(t, e - s)) for (s, e, t) in raw]
-    scored = [item for item in scored if item[3] > 0.0]
+
+    scored: list[tuple[float, float, str, float]] = []
+    for s, e, t in raw:
+        energy, chat = _context_bonus(s, e, audio_curve, chat_spikes)
+        pre = _pre_score(t, e - s) * (1.0 + 0.5 * energy + 0.7 * chat)
+        if pre <= 0.0 and (chat > 0.25 or energy > 0.4):
+            pre = 0.05 + 0.4 * chat + 0.3 * energy  # graine forte, texte plat
+        if pre > 0.0:
+            scored.append((s, e, t, pre))
     finalists = _dedupe(scored)[: max(target_count + 4, 10)]
     if not finalists:
         return []
@@ -467,11 +532,18 @@ def find_highlights(
                 hook_line = _short_label(hook_line, 16)  # phrase courte et lisible
             else:
                 hook_line = ""
+            energy, chat = _context_bonus(start, end, audio_curve, chat_spikes)
+            reasons = list(rated["reasons"])
+            if chat >= 0.5:
+                reasons.insert(0, "⚡ Le chat s'emballe")
+            if energy >= 0.5:
+                reasons.insert(0, "🔊 Pic d'intensité (rires / cris)")
+            score = min(100, rated["score"] + round(18 * chat + 10 * energy))
             highlights.append(
                 Highlight(
                     start=round(max(0.0, start - _LEAD_IN), 2), end=end,
-                    score=rated["score"], title=rated["title"],
-                    summary=rated["summary"], reasons=rated["reasons"], transcript=text,
+                    score=score, title=rated["title"],
+                    summary=rated["summary"], reasons=reasons[:3], transcript=text,
                     hook_score=hook_score, hook_line=hook_line,
                 )
             )

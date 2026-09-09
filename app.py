@@ -210,10 +210,29 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         media = source["path"]
         transcript = transcribe(media, cache_dir=session_dir(), clip_range=source_window)
     model = pick_model() if ollama_available() else None
+
+    # Signaux non textuels : enveloppe de volume (rires / cris / hype) + pics du
+    # chat Twitch (le chat qui s'emballe = moment potentiellement viral).
+    from src.audio_energy import loudness_curve
+
+    _curve = loudness_curve(media)
+    audio_curve = (_curve[0], _curve[1], thumb_offset) if _curve else None
+
+    chat_spikes = None
+    if source["kind"] == "url":
+        from src.twitch_chat import chat_spikes as _compute_spikes
+        from src.twitch_chat import download_chat, is_twitch_vod
+
+        if is_twitch_vod(source["ref"]):
+            _start = source_window[0] if source_window else None
+            _end = source_window[1] if source_window else None
+            _msgs = download_chat(source["ref"], session_dir(), start=_start, end=_end)
+            chat_spikes = _compute_spikes(_msgs) if _msgs else None
+
     found = find_highlights(
         transcript, target_count=target_count,
         min_duration=float(dur_min), max_duration=float(dur_max), model=model,
-        source_window=source_window,
+        source_window=source_window, audio_curve=audio_curve, chat_spikes=chat_spikes,
     )
     thumbs_dir = session_dir() / "highlights"
     shutil.rmtree(thumbs_dir, ignore_errors=True)
