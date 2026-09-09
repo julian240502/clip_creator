@@ -25,11 +25,11 @@ from src.captions import (
 )
 from src.downloader import download_clip, download_source, probe_url
 from src.highlights import HOOK_STRONG, find_highlights
-from src.llm import ollama_available, pick_model
+from src.llm import ollama_available, pick_model, pick_rating_model
 from src.llm import prewarm as prewarm_llm
 from src.paths import SOURCE_CACHE_DIR
 from src.pipeline import process_video
-from src.quality import ASPECT_USAGE, frame_size, get_quality_preset
+from src.quality import ASPECT_USAGE, frame_size
 from src.reframe import reframe_available
 from src.resizer import SplitLayout, resize_clip_for_vertical
 from src.transcribe import (
@@ -124,6 +124,10 @@ def format_rect_svg(aspect: str, box: int = 60) -> str:
 
 
 PREVIEW_QUALITY = "720p"  # l'aperçu reste léger quelle que soit la qualité d'export
+# L'analyse (sélection intelligente) ne lit que l'audio + des vignettes : on
+# télécharge la fenêtre en basse déf pour aller vite. La génération, elle,
+# retéléchargera en pleine qualité.
+_ANALYSIS_MAX_HEIGHT = 480
 
 
 def session_dir() -> Path:
@@ -186,15 +190,14 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
                        source_window: tuple[float, float] | None = None,
                        ) -> tuple[list[dict], str | None, str]:
     """Télécharge (si URL), transcrit, note les moments et en extrait une vignette."""
-    max_h = get_quality_preset(quality_key).source_max_height
     thumb_offset = 0.0
     if source["kind"] == "url" and source_window:
-        # Ne télécharger QUE la fenêtre analysée : une rediff de 5 h = ~30 Go,
-        # inutile pour 30 min d'analyse. Le fichier est ~0-basé -> on recale après.
+        # Ne télécharger QUE la fenêtre analysée, en basse déf (audio + vignettes).
         from src.downloader import download_source_range
 
         media = download_source_range(
-            source["ref"], SOURCE_CACHE_DIR, source_window[0], source_window[1], max_height=max_h,
+            source["ref"], SOURCE_CACHE_DIR, source_window[0], source_window[1],
+            max_height=_ANALYSIS_MAX_HEIGHT,
         )
         # La coupe en copie de flux recule le début à l'image-clé précédente : le
         # fichier est un peu plus long que demandé, on retranche cette marge.
@@ -204,12 +207,18 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         transcript = _shift_transcript(transcribe(media, cache_dir=session_dir()), offset)
         thumb_offset = offset
     elif source["kind"] == "url":
-        media = download_source(source["ref"], SOURCE_CACHE_DIR, max_height=max_h)
+        media = download_source(source["ref"], SOURCE_CACHE_DIR, max_height=_ANALYSIS_MAX_HEIGHT)
         transcript = transcribe(media, cache_dir=session_dir())
     else:
         media = source["path"]
         transcript = transcribe(media, cache_dir=session_dir(), clip_range=source_window)
-    model = pick_model() if ollama_available() else None
+
+    # Libère la VRAM de Whisper avant la notation : sinon il cohabite mal avec le
+    # modèle Ollama sur une carte de 8 Go et la notation rame.
+    from src.transcribe import unload_models
+
+    unload_models()
+    model = pick_rating_model() if ollama_available() else None
 
     # Signaux non textuels : enveloppe de volume (rires / cris / hype) + pics du
     # chat Twitch (le chat qui s'emballe = moment potentiellement viral).

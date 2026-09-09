@@ -106,8 +106,15 @@ En plus du texte, deux signaux d'intensité entrent dans le score :
   Sur une portion analysée, seul le chat de cette fenêtre est téléchargé.
 
 L'écran « moments détectés » liste les extraits classés par score ; on coche ceux à
-produire et seuls ceux-là sont rendus (sous-titres compris). Le modèle Ollama est choisi
-automatiquement (`qwen2.5` > `llama3.1` > `llama3` > `mistral` > …).
+produire et seuls ceux-là sont rendus (sous-titres compris).
+
+**Rapidité de l'analyse.** La fenêtre est téléchargée en **basse déf (480p)** — l'analyse
+ne lit que l'audio + des vignettes ; la génération, elle, retéléchargera en pleine
+qualité. Juste avant la notation, le **modèle Whisper est déchargé de la VRAM** pour ne
+pas étouffer Ollama sur une carte de 8 Go. La notation utilise un **petit modèle** s'il
+y en a un d'installé (`qwen2.5:3b`, `llama3.2:3b`, `gemma2:2b`… — bien plus rapide, et
+noter la viralité n'a pas besoin d'un gros modèle) ; sinon repli sur le modèle habituel
+(`qwen2.5` > `llama3.1` > `llama3` > …). `CLIP_CREATOR_RATING_MODEL` force le choix.
 
 ## Sous-titres incrustés (optionnel)
 

@@ -305,6 +305,19 @@ def test_ollama_available_is_false_when_nothing_listens() -> None:
     assert llm.pick_model("http://127.0.0.1:1") is None
 
 
+def test_pick_rating_model_prefers_a_small_model_then_falls_back(monkeypatch) -> None:
+    monkeypatch.delenv("CLIP_CREATOR_RATING_MODEL", raising=False)
+
+    monkeypatch.setattr(llm, "list_models", lambda *a, **k: ["qwen2.5:7b", "qwen2.5:3b"])
+    assert llm.pick_rating_model() == "qwen2.5:3b"          # petit modèle choisi
+
+    monkeypatch.setattr(llm, "list_models", lambda *a, **k: ["qwen2.5:7b", "mistral:latest"])
+    assert llm.pick_rating_model() == "qwen2.5:7b"          # aucun petit -> pick_model
+
+    monkeypatch.setenv("CLIP_CREATOR_RATING_MODEL", "phi3:mini")
+    assert llm.pick_rating_model() == "phi3:mini"           # forcé par env
+
+
 def test_chat_json_parses_ollama_response(monkeypatch) -> None:
     class _Resp:
         status = 200

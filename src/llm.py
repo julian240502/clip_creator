@@ -7,12 +7,19 @@ n'est pas lancé, l'appelant retombe sur une notation heuristique.
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 
 DEFAULT_HOST = "http://localhost:11434"
 # Ordre de préférence : meilleur suivi de consignes / JSON / français en tête.
 _MODEL_PREFERENCE = ("qwen2.5", "llama3.1", "llama3", "mistral", "gemma2", "phi3", "llama2")
+# Notation des extraits : score + titre court -> un petit modèle suffit et tient
+# en VRAM à côté de Whisper (bien plus rapide sur carte serrée).
+_RATING_PREFERENCE = (
+    "qwen2.5:3b", "qwen2.5:1.5b", "llama3.2:3b", "llama3.2:1b", "llama3.2",
+    "gemma2:2b", "phi3.5", "phi3:mini", "qwen2.5:0.5b",
+)
 
 # Nom (en français) des langues renvoyées par Whisper — pour cadrer la langue de
 # sortie des prompts (titres, résumés, hashtags dans la langue de la vidéo).
@@ -63,6 +70,23 @@ def pick_model(host: str = DEFAULT_HOST) -> str | None:
             if name.split(":")[0] == wanted or name.startswith(wanted):
                 return name
     return models[0]
+
+
+def pick_rating_model(host: str = DEFAULT_HOST) -> str | None:
+    """Modèle pour la **notation** des extraits : préfère un petit modèle (rapide,
+    tient à côté de Whisper). `CLIP_CREATOR_RATING_MODEL` force le choix ; sinon
+    repli sur `pick_model()` si aucun petit modèle n'est installé."""
+    forced = os.environ.get("CLIP_CREATOR_RATING_MODEL", "").strip()
+    if forced:
+        return forced
+    models = list_models(host)
+    if not models:
+        return None
+    for wanted in _RATING_PREFERENCE:
+        for name in models:
+            if name.startswith(wanted):
+                return name
+    return pick_model(host)
 
 
 def prewarm(model: str | None = None, host: str = DEFAULT_HOST) -> None:

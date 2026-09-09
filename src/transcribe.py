@@ -114,6 +114,16 @@ def _load_model(model: str, device: str, compute_type: str):
         return _models[key]
 
 
+def unload_models() -> None:
+    """Vide le cache des modèles Whisper -> libère la VRAM. À appeler avant une
+    grosse étape LLM sur une carte serrée ; le modèle se rechargera au besoin."""
+    import gc
+
+    with _model_lock:
+        _models.clear()
+    gc.collect()
+
+
 def prewarm_model(model: str = DEFAULT_MODEL) -> None:
     """Charge le modèle ET initialise les kernels CUDA (1re inférence).
 
