@@ -58,6 +58,32 @@ _MERGE_GAP = 0.6
 _MERGE_MAX_CHARS = 64
 _MERGE_MAX_SEC = 7.0
 
+# Mots d'un seul tenant qui ont leur place seuls à l'écran (réactions, argot) —
+# on ne les jette PAS même isolés et courts.
+_KEEP_SOLO = {
+    "wow", "oh", "ah", "eh", "hey", "yo", "ok", "okay", "yes", "no", "yeah", "yep",
+    "nope", "nah", "huh", "what", "damn", "bruh", "sheesh", "omg", "lol", "lmao",
+    "gg", "wtf", "bro", "man", "dude", "stop", "go", "run", "wait", "look", "true",
+    "facts", "cap", "based", "clip", "clutch", "chat", "ratio", "w", "l",
+    "oui", "non", "quoi", "hein", "ouais", "ouah", "putain", "wesh", "mec", "frère",
+    "bah", "ben", "grave", "carrément",
+}
+
+
+def _looks_like_fragment(text: str) -> bool:
+    """Un mot isolé, court, plat et non ponctué = presque toujours un bout de
+    transcription attrapé sur du bruit / une coupure de mot (« saint », « the »…),
+    pas une vraie réplique. On garde en revanche « Quoi ?! », « Wow », « Non »…"""
+    stripped = text.strip()
+    if len(stripped.split()) > 1:
+        return False
+    if stripped[-1:] in "!?…" or stripped[-2:] in {"?!", "!?"}:
+        return False
+    core = stripped.strip(" .,;:!?…-–—\"'«»()[]").lower()
+    if not core or core in _KEEP_SOLO:
+        return False
+    return len(core) <= 5
+
 
 def language_supported(code: str | None) -> bool:
     return bool(code) and code.lower() in _LANG_NAMES
@@ -240,6 +266,9 @@ def translate_transcript(
         if cleaned:
             units.append(_Unit(unit.start, unit.end, cleaned))
     units = _merge_short_units(units)
+    # Fragments isolés (mot court, plat, non ponctué) survivants à la fusion : on
+    # les écarte, ils n'apportent rien et cassent la lecture.
+    units = [unit for unit in units if not _looks_like_fragment(unit.text)]
     if not units:
         return transcript
 

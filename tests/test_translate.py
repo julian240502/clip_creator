@@ -2,6 +2,7 @@ from src import llm
 from src.transcribe import Transcript, TranscriptSegment, Word
 from src.translate import (
     _clean_unit_text,
+    _looks_like_fragment,
     _merge_short_units,
     language_supported,
     translate_transcript,
@@ -134,6 +135,36 @@ def test_clean_unit_text_strips_non_spoken_annotations() -> None:
     assert _clean_unit_text("[ Background noise ]") == ""
     assert _clean_unit_text("(laughter) c'est fou") == "c'est fou"
     assert _clean_unit_text("Bonjour tout le monde.") == "Bonjour tout le monde."
+
+
+def test_looks_like_fragment_drops_lone_short_words_but_keeps_reactions() -> None:
+    assert _looks_like_fragment("saint")           # bout de transcription
+    assert _looks_like_fragment("the")
+    assert _looks_like_fragment("insan")            # mot coupé
+    assert not _looks_like_fragment("insane")       # vrai mot (6 lettres)
+    assert not _looks_like_fragment("Quoi ?!")      # réaction ponctuée
+    assert not _looks_like_fragment("Wow")          # interjection connue
+    assert not _looks_like_fragment("Non.")
+    assert not _looks_like_fragment("stop")         # utterance courante gardée
+    assert not _looks_like_fragment("il court")     # 2 mots
+
+
+def test_translate_transcript_drops_an_isolated_fragment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+    words = [
+        Word(0.0, 0.4, "That"), Word(0.4, 0.7, "was"), Word(0.7, 1.2, "amazing."),
+        Word(4.0, 4.3, "saint"),                       # fragment isolé (trou de 2.8 s)
+        Word(8.0, 8.3, "Let's"), Word(8.3, 8.6, "go!"),
+    ]
+    tr = Transcript(
+        language="en", duration=10.0, model="t",
+        segments=[TranscriptSegment(0.0, 10.0, "That was amazing. saint Let's go!", words)],
+    )
+    monkeypatch.setattr(
+        llm, "chat_json", lambda *a, **k: {"t": ["C'était incroyable.", "C'est parti !"]},
+    )
+    out = translate_transcript(tr, "fr", model="llama3")
+    assert [s.text for s in out.segments] == ["C'était incroyable.", "C'est parti !"]
 
 
 def test_clean_unit_text_keeps_real_words_inside_parentheses() -> None:

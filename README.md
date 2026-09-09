@@ -153,7 +153,9 @@ longue vidéo), puis :
   sur les silences et les fragments dérivaient ; ce n'est plus le cas ;
 - avant traduction : seules les **annotations non parlées connues** (`[Music]`,
   `(rires)`, `♪`…) sont retirées — un aparté du streamer entre parenthèses est
-  conservé — et les **micro-unités collées** sont fusionnées pour ne pas flasher ;
+  conservé — les **micro-unités collées** sont fusionnées, et un **mot isolé
+  court et plat** (« saint », « the »… — un bout de transcription attrapé sur du
+  bruit) est écarté (mais « Quoi ?! », « Wow », « Non » restent) ;
 - consigne au modèle : **fidélité avant tout** — garder tous les éléments concrets
   (noms, marques, lieux, chiffres, titres de jeux), ne raccourcir que les
   hésitations ; garder un terme d'argot / une expression anglaise tel quel s'il n'a
