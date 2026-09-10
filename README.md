@@ -98,13 +98,16 @@ En plus du texte, deux signaux d'intensité entrent dans le score :
   se traduisent par des pics de volume et des transitions silence→explosion. Les
   passages intenses sont bonifiés et portent un **🔊 Pic d'intensité**. Marche
   aussi sur les fichiers importés.
-- **Chat Twitch** (rediff uniquement) — **désactivé par défaut**, activer avec
-  **`CLIP_CREATOR_ENABLE_CHAT=1`**. Les commentaires du VOD sont récupérés
-  directement depuis l'API web de Twitch (aucune dépendance, pas de compte) ;
-  quand le débit de messages dépasse nettement sa base locale — surtout en
-  emotes de rire (KEKW, OMEGALUL…) — c'est un **moment potentiellement viral** ;
+- **Chat Twitch** (rediff uniquement) — **désactivé par défaut** : cocher
+  **« Utiliser le chat Twitch »** dans les réglages (la case n'apparaît que sur
+  un VOD Twitch), ou forcer avec **`CLIP_CREATOR_ENABLE_CHAT=1`**. Les
+  commentaires du VOD sont récupérés directement depuis l'API web de Twitch
+  (aucune dépendance, pas de compte) ; quand le débit de messages dépasse
+  nettement sa base locale — surtout en emotes de rire (KEKW, OMEGALUL…) —
+  c'est un **moment potentiellement viral** ;
   ces instants (recalés du délai de réaction du chat) **créent une fenêtre
-  candidate** et portent un **⚡ Le chat s'emballe**. La collecte est bornée
+  candidate** et portent un **⚡ Le chat s'emballe**. L'écran « moments détectés »
+  liste les pics repérés (horodatage + intensité). La collecte est bornée
   (75 s d'horloge / `CLIP_CREATOR_CHAT_MAX_SECONDS`, 150 k messages) et tourne
   dans un thread **abandonné au bout de 90 s** s'il traîne (l'analyse continue
   sans le chat) — utile sur un très gros stream où le chat est énorme.

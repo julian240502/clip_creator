@@ -151,6 +151,7 @@ def reset_source() -> None:
         "source", "clips", "project_dir", "captions_skipped",
         "style_preview", "style_preview_sig", "preview_at", "split_preview",
         "highlights", "highlights_model", "source_lang", "export_label",
+        "chat_spikes", "chat_requested",
     ):
         st.session_state.pop(key, None)
     _forget_send_selection()
@@ -189,6 +190,7 @@ def _shift_transcript(transcript, delta: float):
 def analyse_highlights(source: dict, quality_key: str, target_count: int,
                        dur_min: float, dur_max: float,
                        source_window: tuple[float, float] | None = None,
+                       use_chat: bool = False,
                        progress=None,
                        ) -> tuple[list[dict], str | None, str]:
     """Télécharge (si URL), transcrit, note les moments et en extrait une vignette."""
@@ -242,7 +244,8 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
     _done("Enveloppe audio")
 
     chat_spikes = None
-    _chat_on = os.environ.get("CLIP_CREATOR_ENABLE_CHAT", "").strip().lower() in {"1", "true", "on"}
+    _env_chat = os.environ.get("CLIP_CREATOR_ENABLE_CHAT", "").strip().lower() in {"1", "true", "on"}
+    _chat_on = use_chat or _env_chat
     if _chat_on and source["kind"] == "url":
         from src.twitch_chat import chat_spikes as _compute_spikes
         from src.twitch_chat import download_chat, is_twitch_vod
@@ -266,6 +269,14 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
                 progress("Chat Twitch : trop lent, abandonné — on continue sans")
             _msgs = _box.get("msgs")
             chat_spikes = _compute_spikes(_msgs) if _msgs else None
+    # Rendu visible dans l'écran « moments détectés » (feedback : le signal a-t-il servi).
+    st.session_state["chat_spikes"] = chat_spikes or []
+    st.session_state["chat_requested"] = bool(_chat_on)
+    if _chat_on and progress:
+        progress(
+            f"Chat Twitch : {len(chat_spikes)} pic(s) détecté(s)" if chat_spikes
+            else "Chat Twitch : aucun pic marquant"
+        )
     _done("Chat Twitch" if _chat_on else "Chat Twitch (désactivé)")
 
     found = find_highlights(
@@ -1076,6 +1087,23 @@ else:
             st.caption("Toute la vidéo est analysée.")
     else:
         st.caption("Durée inconnue : toute la vidéo sera analysée.")
+
+    use_chat = False
+    if source["kind"] == "url":
+        from src.twitch_chat import is_twitch_vod
+
+        if is_twitch_vod(source["ref"]):
+            use_chat = st.checkbox(
+                "Utiliser le chat Twitch",
+                key="use_chat",
+                help=(
+                    "Repère les instants où le chat de la rediff s'emballe (surtout "
+                    "en emotes de rire) : ils deviennent des extraits candidats et "
+                    "leur score est bonifié. Ajoute quelques secondes à l'analyse — "
+                    "plus long sur un très gros stream (collecte bornée à 75 s)."
+                ),
+            )
+
     if st.button("Analyser les moments", use_container_width=True):
         with st.status("Analyse des moments…", expanded=True) as _status:
             def _log(msg: str) -> None:
@@ -1085,7 +1113,7 @@ else:
             try:
                 found, used, src_lang = analyse_highlights(
                     source, quality_key, target_count, dur_min, dur_max,
-                    source_window=smart_window, progress=_log,
+                    source_window=smart_window, use_chat=use_chat, progress=_log,
                 )
                 st.session_state["highlights"] = found
                 st.session_state["highlights_model"] = used
@@ -1129,6 +1157,22 @@ if smart:
             + (f" · {n_hooked} avec une accroche forte ⚡" if n_hooked else "")
             + (f" · modèle `{model_used}`" if ADVANCED and model_used else "")
         )
+
+        if st.session_state.get("chat_requested"):
+            _spikes = st.session_state.get("chat_spikes") or []
+            if _spikes:
+                with st.expander(f"⚡ Chat Twitch — {len(_spikes)} moment(s) chaud(s)"):
+                    for _t, _inten in _spikes:
+                        _bars = "▮" * min(12, max(1, int(round(_inten))))
+                        st.caption(f"{timecode(_t)} · intensité {_inten:.1f}  {_bars}")
+                    st.caption(
+                        "Ces instants sont devenus des extraits candidats et ont bonifié "
+                        "le score des extraits qui tombent dessus — cherche la mention "
+                        "« ⚡ Le chat s'emballe » sous un extrait."
+                    )
+            else:
+                st.caption("⚡ Chat Twitch activé — aucun pic marquant sur cette portion.")
+
         n_highlights = len(highlights)
         for i in range(n_highlights):
             st.session_state.setdefault(f"hl-{i}", i < min(3, n_highlights))
