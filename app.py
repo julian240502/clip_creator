@@ -64,6 +64,19 @@ label p, [data-testid="stWidgetLabel"] p {color:#e2e3f0 !important}
 [data-testid="stExpander"] summary p {color:#e2e3f0}
 [data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"] {color:#bcbfd0}
 
+/* Expander & bloc de statut : accordés au fond sombre (sinon fond blanc au repos) */
+[data-testid="stExpander"] details,
+[data-testid="stExpander"] summary,
+[data-testid="stStatus"], [data-testid="stStatusWidget"],
+[data-testid="stStatus"] details, [data-testid="stStatus"] summary,
+.streamlit-expanderHeader, .streamlit-expanderContent {
+  background:#171924 !important;border-color:#292c3d !important;
+}
+[data-testid="stExpander"] details {border-radius:14px}
+[data-testid="stExpander"] summary:hover p,
+[data-testid="stStatus"] summary:hover p {color:#fff}
+[data-testid="stStatus"] [data-testid="stMarkdownContainer"] p {color:#d6d8e6}
+
 /* Estimation mise en avant */
 [data-testid="stMetric"] {background:#181a26;border:1px solid #2c2f42;border-left:3px solid #8b87ff;padding:1rem 1.1rem;border-radius:14px}
 [data-testid="stMetricValue"] {color:#fff;font-weight:700}
@@ -148,9 +161,10 @@ def _forget_send_selection() -> None:
 
 def reset_source() -> None:
     for key in (
-        "source", "clips", "project_dir", "captions_skipped",
+        "source", "clips", "clips_meta", "_zip_cache", "project_dir", "captions_skipped",
         "style_preview", "style_preview_sig", "preview_at", "split_preview",
         "highlights", "highlights_model", "source_lang", "export_label",
+        "chat_spikes", "chat_requested",
     ):
         st.session_state.pop(key, None)
     _forget_send_selection()
@@ -189,6 +203,7 @@ def _shift_transcript(transcript, delta: float):
 def analyse_highlights(source: dict, quality_key: str, target_count: int,
                        dur_min: float, dur_max: float,
                        source_window: tuple[float, float] | None = None,
+                       use_chat: bool = False,
                        progress=None,
                        ) -> tuple[list[dict], str | None, str]:
     """Télécharge (si URL), transcrit, note les moments et en extrait une vignette."""
@@ -242,7 +257,8 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
     _done("Enveloppe audio")
 
     chat_spikes = None
-    _chat_on = os.environ.get("CLIP_CREATOR_ENABLE_CHAT", "").strip().lower() in {"1", "true", "on"}
+    _env_chat = os.environ.get("CLIP_CREATOR_ENABLE_CHAT", "").strip().lower() in {"1", "true", "on"}
+    _chat_on = use_chat or _env_chat
     if _chat_on and source["kind"] == "url":
         from src.twitch_chat import chat_spikes as _compute_spikes
         from src.twitch_chat import download_chat, is_twitch_vod
@@ -250,8 +266,9 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         if is_twitch_vod(source["ref"]):
             _start = source_window[0] if source_window else None
             _end = source_window[1] if source_window else None
-            # `chat-downloader` peut se bloquer indéfiniment (retry Twitch) : on
-            # l'exécute dans un thread qu'on abandonne au bout de 90 s.
+            # download_chat est borné (cap temps interne), mais un très gros
+            # stream sur une longue fenêtre = beaucoup de pages : on l'exécute
+            # dans un thread qu'on abandonne au bout de 90 s par sécurité.
             _box: dict = {}
             _th = threading.Thread(
                 target=lambda: _box.setdefault(
@@ -265,6 +282,14 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
                 progress("Chat Twitch : trop lent, abandonné — on continue sans")
             _msgs = _box.get("msgs")
             chat_spikes = _compute_spikes(_msgs) if _msgs else None
+    # Rendu visible dans l'écran « moments détectés » (feedback : le signal a-t-il servi).
+    st.session_state["chat_spikes"] = chat_spikes or []
+    st.session_state["chat_requested"] = bool(_chat_on)
+    if _chat_on and progress:
+        progress(
+            f"Chat Twitch : {len(chat_spikes)} pic(s) détecté(s)" if chat_spikes
+            else "Chat Twitch : aucun pic marquant"
+        )
     _done("Chat Twitch" if _chat_on else "Chat Twitch (désactivé)")
 
     found = find_highlights(
@@ -328,9 +353,59 @@ def _read_bytes_resilient(path: Path, attempts: int = 3, delay: float = 0.5) -> 
     return None
 
 
-def render_clip_card(clip: Path, key: str, *, selectable: bool = False) -> None:
-    st.video(str(clip))
-    st.caption(clip.name)
+def _meta_badges_html(meta: dict | None) -> str:
+    """Petite ligne de badges sous un clip généré : viralité + accroche + chat."""
+    if not meta:
+        return ""
+    score = int(meta.get("score", 0))
+    tone = "#3ddc84" if score >= 75 else "#ffb020" if score >= 50 else "#ff5a5f"
+    parts = [
+        f"<span style='font-weight:800;color:{tone}'>{score}</span>"
+        "<span style='color:#9a9db0;font-size:.68rem'>&nbsp;viralité</span>"
+    ]
+    if meta.get("hook"):
+        parts.append(
+            "<span style='background:#123a2a;color:#3ddc84;border:1px solid #1f6b4a;"
+            "border-radius:999px;padding:.03rem .4rem;font-size:.66rem;font-weight:700;"
+            "white-space:nowrap'>⚡ Accroche forte</span>"
+        )
+    chat = float(meta.get("chat", 0.0))
+    if chat > 0:
+        parts.append(
+            "<span style='background:#241a3a;color:#c9a6ff;border:1px solid #9146ff;"
+            "border-radius:999px;padding:.03rem .4rem;font-size:.66rem;font-weight:700;"
+            f"white-space:nowrap'>⚡ Chat s'emballe&nbsp;{chat:.1f}</span>"
+        )
+    return (
+        "<div style='display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;"
+        "margin:.1rem 0 .4rem'>" + "".join(parts) + "</div>"
+    )
+
+
+# Nb de lecteurs vidéo chargés d'emblée. Au-delà, chaque <video> local + la
+# lecture complète du fichier pour le bouton « Télécharger » saturent le serveur
+# média (mono-thread) de Streamlit : les autres lecteurs tournent alors dans le
+# vide. Les clips suivants n'affichent la vidéo qu'à la demande.
+_EAGER_CLIPS = 3
+
+
+def render_clip_card(
+    clip: Path, key: str, *, selectable: bool = False, meta: dict | None = None,
+    eager: bool = True,
+) -> None:
+    st.markdown(f"**{clip.name}**")
+    badges = _meta_badges_html(meta)
+    if badges:
+        st.markdown(badges, unsafe_allow_html=True)
+
+    vid_key = f"vid-{key}"
+    shown = eager or st.session_state.get(vid_key, False)
+    if shown:
+        st.video(str(clip))
+    elif st.button("▶ Afficher l'aperçu", key=f"show-{vid_key}", use_container_width=True):
+        st.session_state[vid_key] = True
+        st.rerun()
+
     if selectable:
         sent = clip.name in st.session_state.get("sent_clips", set())
         st.checkbox(
@@ -341,12 +416,16 @@ def render_clip_card(clip: Path, key: str, *, selectable: bool = False) -> None:
     if sidecar.is_file():
         with st.expander("Titre & hashtags"):
             st.code(sidecar.read_text(encoding="utf-8"), language=None)
-    data = _read_bytes_resilient(clip)
-    if data is not None:
-        st.download_button(
-            "Télécharger", data, clip.name, "video/mp4",
-            key=key, use_container_width=True,
-        )
+
+    if shown:
+        data = _read_bytes_resilient(clip)
+        if data is not None:
+            st.download_button(
+                "Télécharger", data, clip.name, "video/mp4",
+                key=key, use_container_width=True,
+            )
+    else:
+        st.caption("Ouvre l'aperçu pour lire et télécharger ce clip.")
 
 
 def _preview_source(source: dict, at: float, seconds: float = 4.0, max_height: int = 480) -> Path:
@@ -477,12 +556,17 @@ def render_captions_controls(
                     "par l'IA locale." + translation_note
                 )
         base = TEMPLATES[st.selectbox("Style", list(TEMPLATES))]
+        # Fond vidéo flouté : la vidéo nette occupe une bande centrale plus petite,
+        # on part donc sur un texte plus gros et remonté (ajustable ensuite).
+        _blur_bg = background == "blur"
+        _def_size = 85 if _blur_bg else base.font_size
+        _def_nudge_y = 185 if _blur_bg else base.nudge_y
         col_a, col_b, col_c = st.columns(3)
         font = col_a.selectbox(
             "Police", CAPTION_FONTS,
             index=CAPTION_FONTS.index(base.font) if base.font in CAPTION_FONTS else 0,
         )
-        font_size = col_b.slider("Taille", 32, 130, base.font_size, 2)
+        font_size = col_b.slider("Taille", 32, 130, _def_size, 2)
         position_label = col_c.selectbox(
             "Position", list(CAPTION_POSITIONS),
             index=list(CAPTION_POSITIONS.values()).index(base.position),
@@ -498,7 +582,7 @@ def render_captions_controls(
         col_x, col_y = st.columns(2)
         nudge_x = col_x.slider("Décalage horizontal (px)", -300, 300, base.nudge_x, 5,
                                help="+ vers la droite")
-        nudge_y = col_y.slider("Décalage vertical (px)", -400, 400, base.nudge_y, 5,
+        nudge_y = col_y.slider("Décalage vertical (px)", -400, 400, _def_nudge_y, 5,
                                help="+ vers le haut")
         uppercase = st.toggle("MAJUSCULES", value=base.uppercase)
         style = replace(
@@ -860,21 +944,32 @@ if st.session_state.get("clips"):
     project_dir = st.session_state.get("project_dir")
     if project_dir:
         archive_path = Path(project_dir) / "clip-creator-exports.zip"
-        zip_data: bytes | None = None
-        last_exc: OSError | None = None
-        for _ in range(3):
-            try:
-                with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
-                    for clip in clips:
-                        archive.write(clip, clip.name)
-                        sidecar = clip.with_suffix(".txt")
-                        if sidecar.is_file():
-                            archive.write(sidecar, sidecar.name)
-                zip_data = archive_path.read_bytes()
-                break
-            except OSError as exc:
-                last_exc = exc
-                time.sleep(0.5)
+        # L'archive était reconstruite (lecture de tous les clips) à CHAQUE rerun —
+        # une case cochée bloquait alors le serveur média et les <video> ne
+        # chargeaient plus. On ne (re)construit que si la liste des clips change.
+        _sig = tuple(
+            (c.name, c.stat().st_size if c.exists() else 0) for c in clips
+        )
+        _cache = st.session_state.get("_zip_cache") or {}
+        if _cache.get("sig") != _sig:
+            zip_data: bytes | None = None
+            last_exc: OSError | None = None
+            for _ in range(3):
+                try:
+                    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
+                        for clip in clips:
+                            archive.write(clip, clip.name)
+                            sidecar = clip.with_suffix(".txt")
+                            if sidecar.is_file():
+                                archive.write(sidecar, sidecar.name)
+                    zip_data = archive_path.read_bytes()
+                    break
+                except OSError as exc:
+                    last_exc = exc
+                    time.sleep(0.5)
+            _cache = {"sig": _sig, "data": zip_data, "exc": last_exc}
+            st.session_state["_zip_cache"] = _cache
+        zip_data, last_exc = _cache["data"], _cache["exc"]
         if zip_data is not None:
             st.download_button(
                 "Télécharger tous les clips (.zip)", zip_data, "clips.zip",
@@ -890,10 +985,15 @@ if st.session_state.get("clips"):
     export_dir = st.session_state.get("export_dir", "").strip()
     export_label = st.session_state.get("export_label", "").strip()
 
+    clips_meta_saved = st.session_state.get("clips_meta") or []
     columns = st.columns(3)
     for index, clip in enumerate(clips):
         with columns[index % 3]:
-            render_clip_card(clip, key=f"clip-{index}", selectable=bool(export_dir))
+            render_clip_card(
+                clip, key=f"clip-{index}", selectable=bool(export_dir),
+                meta=clips_meta_saved[index] if index < len(clips_meta_saved) else None,
+                eager=index < _EAGER_CLIPS,
+            )
 
     if export_dir:
         n = len(clips)
@@ -938,7 +1038,7 @@ if st.session_state.get("clips"):
 
     left, right = st.columns(2)
     if left.button("Régler à nouveau", use_container_width=True):
-        for key in ("clips", "project_dir", "captions_skipped"):
+        for key in ("clips", "clips_meta", "_zip_cache", "project_dir", "captions_skipped"):
             st.session_state.pop(key, None)
         _forget_send_selection()
         st.rerun()
@@ -1075,16 +1175,35 @@ else:
             st.caption("Toute la vidéo est analysée.")
     else:
         st.caption("Durée inconnue : toute la vidéo sera analysée.")
+
+    use_chat = False
+    if source["kind"] == "url":
+        from src.twitch_chat import is_twitch_vod
+
+        if is_twitch_vod(source["ref"]):
+            use_chat = st.checkbox(
+                "Utiliser le chat Twitch",
+                key="use_chat",
+                help=(
+                    "Repère les instants où le chat de la rediff s'emballe (surtout "
+                    "en emotes de rire) : ils deviennent des extraits candidats et "
+                    "leur score est bonifié. Ajoute quelques secondes à l'analyse — "
+                    "plus long sur un très gros stream (collecte bornée à 75 s)."
+                ),
+            )
+
     if st.button("Analyser les moments", use_container_width=True):
         with st.status("Analyse des moments…", expanded=True) as _status:
             def _log(msg: str) -> None:
                 _status.write(f"⏱️ {msg}")
+                # L'en-tête (visible même replié) suit la phase en cours.
+                _status.update(label=f"Analyse — {msg[:60]}")
                 print(f"[analyse] {msg}", flush=True)
 
             try:
                 found, used, src_lang = analyse_highlights(
                     source, quality_key, target_count, dur_min, dur_max,
-                    source_window=smart_window, progress=_log,
+                    source_window=smart_window, use_chat=use_chat, progress=_log,
                 )
                 st.session_state["highlights"] = found
                 st.session_state["highlights_model"] = used
@@ -1112,6 +1231,7 @@ if not smart:
 # --- Phase 2.5 : choisir les moments (mode intelligent) -----------------------
 clips_windows: list[tuple[float, float]] | None = None
 clips_hints: list[tuple[str, str]] | None = None
+clips_meta: list[dict] = []  # par clip coché : score viral, accroche forte, pic chat
 gen_label = "Générer les clips  ✦"
 gen_disabled = False
 if smart:
@@ -1128,6 +1248,17 @@ if smart:
             + (f" · {n_hooked} avec une accroche forte ⚡" if n_hooked else "")
             + (f" · modèle `{model_used}`" if ADVANCED and model_used else "")
         )
+
+        if st.session_state.get("chat_requested"):
+            _spikes = st.session_state.get("chat_spikes") or []
+            if _spikes:
+                st.caption(
+                    f"⚡ Chat Twitch : **{len(_spikes)}** pic(s) repéré(s) — "
+                    "l'intensité est indiquée sur les extraits concernés."
+                )
+            else:
+                st.caption("⚡ Chat Twitch activé — aucun pic marquant sur cette portion.")
+
         n_highlights = len(highlights)
         for i in range(n_highlights):
             st.session_state.setdefault(f"hl-{i}", i < min(3, n_highlights))
@@ -1165,6 +1296,14 @@ if smart:
                         "border-radius:999px;padding:.05rem .45rem;font-size:.68rem;"
                         "font-weight:700;white-space:nowrap'>⚡ Accroche forte</span>"
                     )
+                chat_int = float(item.get("chat_intensity", 0.0))
+                if chat_int > 0:
+                    title_html += (
+                        " <span style='background:#241a3a;color:#c9a6ff;border:1px solid #9146ff;"
+                        "border-radius:999px;padding:.05rem .45rem;font-size:.68rem;"
+                        "font-weight:700;white-space:nowrap'>⚡ Chat s'emballe</span>"
+                        f" <span style='color:#9a9db0;font-size:.68rem'>intensité {chat_int:.1f}</span>"
+                    )
                 if ADVANCED:
                     title_html += (
                         f" <span style='color:#9a9db0;font-size:.68rem'>hook {hook_score}/100</span>"
@@ -1193,6 +1332,11 @@ if smart:
             if keep:
                 picks.append((float(item["start"]), float(item["end"])))
                 pick_hints.append((str(item["title"]), str(item["summary"])))
+                clips_meta.append({
+                    "score": int(item.get("score", 0)),
+                    "hook": int(item.get("hook_score", 0)) >= HOOK_STRONG,
+                    "chat": float(item.get("chat_intensity", 0.0)),
+                })
         clips_windows = picks
         clips_hints = pick_hints
 
@@ -1258,8 +1402,13 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
         status.caption(message)
 
     def on_clip(path: Path) -> None:
-        with live_columns[counter["n"] % 3]:
-            render_clip_card(Path(path), key=f"live-{counter['n']}")
+        n = counter["n"]
+        with live_columns[n % 3]:
+            render_clip_card(
+                Path(path), key=f"live-{n}",
+                meta=clips_meta[n] if n < len(clips_meta) else None,
+                eager=n < _EAGER_CLIPS,
+            )
         counter["n"] += 1
 
     try:
@@ -1289,6 +1438,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
         )
         st.session_state.project_dir = str(project_dir)
         st.session_state.clips = [str(clip) for clip in clips]
+        st.session_state["clips_meta"] = clips_meta
         st.session_state["captions_skipped"] = bool(
             captions_style is not None and not _transcript_has_words(str(project_dir))
         )
