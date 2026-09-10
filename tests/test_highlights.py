@@ -239,7 +239,8 @@ def test_find_highlights_seeds_a_window_from_a_chat_spike() -> None:
     )
     covering = [h for h in result if h.start <= spike_t <= h.end]
     assert covering, "le pic de chat doit être couvert par un extrait"
-    assert any("chat" in r.lower() for h in covering for r in h.reasons)
+    # L'intensité du pic est portée par un champ dédié (badge UI), pas par reasons.
+    assert any(h.chat_intensity >= 4.0 for h in covering)
 
 
 def test_find_highlights_audio_intensity_lifts_the_hot_window() -> None:

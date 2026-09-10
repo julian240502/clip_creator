@@ -64,6 +64,19 @@ label p, [data-testid="stWidgetLabel"] p {color:#e2e3f0 !important}
 [data-testid="stExpander"] summary p {color:#e2e3f0}
 [data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"] {color:#bcbfd0}
 
+/* Expander & bloc de statut : accordés au fond sombre (sinon fond blanc au repos) */
+[data-testid="stExpander"] details,
+[data-testid="stExpander"] summary,
+[data-testid="stStatus"], [data-testid="stStatusWidget"],
+[data-testid="stStatus"] details, [data-testid="stStatus"] summary,
+.streamlit-expanderHeader, .streamlit-expanderContent {
+  background:#171924 !important;border-color:#292c3d !important;
+}
+[data-testid="stExpander"] details {border-radius:14px}
+[data-testid="stExpander"] summary:hover p,
+[data-testid="stStatus"] summary:hover p {color:#fff}
+[data-testid="stStatus"] [data-testid="stMarkdownContainer"] p {color:#d6d8e6}
+
 /* Estimation mise en avant */
 [data-testid="stMetric"] {background:#181a26;border:1px solid #2c2f42;border-left:3px solid #8b87ff;padding:1rem 1.1rem;border-radius:14px}
 [data-testid="stMetricValue"] {color:#fff;font-weight:700}
@@ -489,12 +502,17 @@ def render_captions_controls(
                     "par l'IA locale." + translation_note
                 )
         base = TEMPLATES[st.selectbox("Style", list(TEMPLATES))]
+        # Fond vidéo flouté : la vidéo nette occupe une bande centrale plus petite,
+        # on part donc sur un texte plus gros et remonté (ajustable ensuite).
+        _blur_bg = background == "blur"
+        _def_size = 85 if _blur_bg else base.font_size
+        _def_nudge_y = 185 if _blur_bg else base.nudge_y
         col_a, col_b, col_c = st.columns(3)
         font = col_a.selectbox(
             "Police", CAPTION_FONTS,
             index=CAPTION_FONTS.index(base.font) if base.font in CAPTION_FONTS else 0,
         )
-        font_size = col_b.slider("Taille", 32, 130, base.font_size, 2)
+        font_size = col_b.slider("Taille", 32, 130, _def_size, 2)
         position_label = col_c.selectbox(
             "Position", list(CAPTION_POSITIONS),
             index=list(CAPTION_POSITIONS.values()).index(base.position),
@@ -510,7 +528,7 @@ def render_captions_controls(
         col_x, col_y = st.columns(2)
         nudge_x = col_x.slider("Décalage horizontal (px)", -300, 300, base.nudge_x, 5,
                                help="+ vers la droite")
-        nudge_y = col_y.slider("Décalage vertical (px)", -400, 400, base.nudge_y, 5,
+        nudge_y = col_y.slider("Décalage vertical (px)", -400, 400, _def_nudge_y, 5,
                                help="+ vers le haut")
         uppercase = st.toggle("MAJUSCULES", value=base.uppercase)
         style = replace(
@@ -1108,6 +1126,8 @@ else:
         with st.status("Analyse des moments…", expanded=True) as _status:
             def _log(msg: str) -> None:
                 _status.write(f"⏱️ {msg}")
+                # L'en-tête (visible même replié) suit la phase en cours.
+                _status.update(label=f"Analyse — {msg[:60]}")
                 print(f"[analyse] {msg}", flush=True)
 
             try:
@@ -1161,15 +1181,10 @@ if smart:
         if st.session_state.get("chat_requested"):
             _spikes = st.session_state.get("chat_spikes") or []
             if _spikes:
-                with st.expander(f"⚡ Chat Twitch — {len(_spikes)} moment(s) chaud(s)"):
-                    for _t, _inten in _spikes:
-                        _bars = "▮" * min(12, max(1, int(round(_inten))))
-                        st.caption(f"{timecode(_t)} · intensité {_inten:.1f}  {_bars}")
-                    st.caption(
-                        "Ces instants sont devenus des extraits candidats et ont bonifié "
-                        "le score des extraits qui tombent dessus — cherche la mention "
-                        "« ⚡ Le chat s'emballe » sous un extrait."
-                    )
+                st.caption(
+                    f"⚡ Chat Twitch : **{len(_spikes)}** pic(s) repéré(s) — "
+                    "l'intensité est indiquée sur les extraits concernés."
+                )
             else:
                 st.caption("⚡ Chat Twitch activé — aucun pic marquant sur cette portion.")
 
@@ -1209,6 +1224,14 @@ if smart:
                         " <span style='background:#123a2a;color:#3ddc84;border:1px solid #1f6b4a;"
                         "border-radius:999px;padding:.05rem .45rem;font-size:.68rem;"
                         "font-weight:700;white-space:nowrap'>⚡ Accroche forte</span>"
+                    )
+                chat_int = float(item.get("chat_intensity", 0.0))
+                if chat_int > 0:
+                    title_html += (
+                        " <span style='background:#241a3a;color:#c9a6ff;border:1px solid #9146ff;"
+                        "border-radius:999px;padding:.05rem .45rem;font-size:.68rem;"
+                        "font-weight:700;white-space:nowrap'>⚡ Chat s'emballe</span>"
+                        f" <span style='color:#9a9db0;font-size:.68rem'>intensité {chat_int:.1f}</span>"
                     )
                 if ADVANCED:
                     title_html += (

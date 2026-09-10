@@ -132,6 +132,7 @@ class Highlight:
     transcript: str = ""
     hook_score: int = 0     # 0-100, qualité des toutes premières secondes
     hook_line: str = ""     # phrase d'accroche mise en avant ("" si ouverture molle)
+    chat_intensity: float = 0.0  # pic de chat Twitch sur l'extrait (0 = aucun, ~2.4+ = net)
 
     @property
     def duration(self) -> float:
@@ -281,6 +282,14 @@ def _context_bonus(
         hits = [inten for t, inten in spikes if start - 2.0 <= t <= end]
         chat = min(1.0, (max(hits) if hits else 0.0) / 3.0)
     return energy, chat
+
+
+def _chat_peak(start: float, end: float, spikes: list[tuple[float, float]] | None) -> float:
+    """Intensité brute du plus fort pic de chat sur `[start, end]` (0 si aucun)."""
+    if not spikes:
+        return 0.0
+    hits = [inten for t, inten in spikes if start - 2.0 <= t <= end]
+    return round(max(hits), 2) if hits else 0.0
 
 
 def _dedupe(
@@ -534,8 +543,7 @@ def find_highlights(
                 hook_line = ""
             energy, chat = _context_bonus(start, end, audio_curve, chat_spikes)
             reasons = list(rated["reasons"])
-            if chat >= 0.5:
-                reasons.insert(0, "⚡ Le chat s'emballe")
+            # Le chat s'emballe -> badge dédié dans l'UI (chat_intensity), pas dans reasons.
             if energy >= 0.5:
                 reasons.insert(0, "🔊 Pic d'intensité (rires / cris)")
             score = min(100, rated["score"] + round(18 * chat + 10 * energy))
@@ -545,6 +553,7 @@ def find_highlights(
                     score=score, title=rated["title"],
                     summary=rated["summary"], reasons=reasons[:3], transcript=text,
                     hook_score=hook_score, hook_line=hook_line,
+                    chat_intensity=_chat_peak(start, end, chat_spikes),
                 )
             )
         report(
