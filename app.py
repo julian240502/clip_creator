@@ -161,7 +161,7 @@ def _forget_send_selection() -> None:
 
 def reset_source() -> None:
     for key in (
-        "source", "clips", "clips_meta", "project_dir", "captions_skipped",
+        "source", "clips", "clips_meta", "_zip_cache", "project_dir", "captions_skipped",
         "style_preview", "style_preview_sig", "preview_at", "split_preview",
         "highlights", "highlights_model", "source_lang", "export_label",
         "chat_spikes", "chat_requested",
@@ -382,14 +382,30 @@ def _meta_badges_html(meta: dict | None) -> str:
     )
 
 
+# Nb de lecteurs vidéo chargés d'emblée. Au-delà, chaque <video> local + la
+# lecture complète du fichier pour le bouton « Télécharger » saturent le serveur
+# média (mono-thread) de Streamlit : les autres lecteurs tournent alors dans le
+# vide. Les clips suivants n'affichent la vidéo qu'à la demande.
+_EAGER_CLIPS = 3
+
+
 def render_clip_card(
     clip: Path, key: str, *, selectable: bool = False, meta: dict | None = None,
+    eager: bool = True,
 ) -> None:
-    st.video(str(clip))
-    st.caption(clip.name)
+    st.markdown(f"**{clip.name}**")
     badges = _meta_badges_html(meta)
     if badges:
         st.markdown(badges, unsafe_allow_html=True)
+
+    vid_key = f"vid-{key}"
+    shown = eager or st.session_state.get(vid_key, False)
+    if shown:
+        st.video(str(clip))
+    elif st.button("▶ Afficher l'aperçu", key=f"show-{vid_key}", use_container_width=True):
+        st.session_state[vid_key] = True
+        st.rerun()
+
     if selectable:
         sent = clip.name in st.session_state.get("sent_clips", set())
         st.checkbox(
@@ -400,12 +416,16 @@ def render_clip_card(
     if sidecar.is_file():
         with st.expander("Titre & hashtags"):
             st.code(sidecar.read_text(encoding="utf-8"), language=None)
-    data = _read_bytes_resilient(clip)
-    if data is not None:
-        st.download_button(
-            "Télécharger", data, clip.name, "video/mp4",
-            key=key, use_container_width=True,
-        )
+
+    if shown:
+        data = _read_bytes_resilient(clip)
+        if data is not None:
+            st.download_button(
+                "Télécharger", data, clip.name, "video/mp4",
+                key=key, use_container_width=True,
+            )
+    else:
+        st.caption("Ouvre l'aperçu pour lire et télécharger ce clip.")
 
 
 def _preview_source(source: dict, at: float, seconds: float = 4.0, max_height: int = 480) -> Path:
@@ -924,21 +944,32 @@ if st.session_state.get("clips"):
     project_dir = st.session_state.get("project_dir")
     if project_dir:
         archive_path = Path(project_dir) / "clip-creator-exports.zip"
-        zip_data: bytes | None = None
-        last_exc: OSError | None = None
-        for _ in range(3):
-            try:
-                with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
-                    for clip in clips:
-                        archive.write(clip, clip.name)
-                        sidecar = clip.with_suffix(".txt")
-                        if sidecar.is_file():
-                            archive.write(sidecar, sidecar.name)
-                zip_data = archive_path.read_bytes()
-                break
-            except OSError as exc:
-                last_exc = exc
-                time.sleep(0.5)
+        # L'archive était reconstruite (lecture de tous les clips) à CHAQUE rerun —
+        # une case cochée bloquait alors le serveur média et les <video> ne
+        # chargeaient plus. On ne (re)construit que si la liste des clips change.
+        _sig = tuple(
+            (c.name, c.stat().st_size if c.exists() else 0) for c in clips
+        )
+        _cache = st.session_state.get("_zip_cache") or {}
+        if _cache.get("sig") != _sig:
+            zip_data: bytes | None = None
+            last_exc: OSError | None = None
+            for _ in range(3):
+                try:
+                    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
+                        for clip in clips:
+                            archive.write(clip, clip.name)
+                            sidecar = clip.with_suffix(".txt")
+                            if sidecar.is_file():
+                                archive.write(sidecar, sidecar.name)
+                    zip_data = archive_path.read_bytes()
+                    break
+                except OSError as exc:
+                    last_exc = exc
+                    time.sleep(0.5)
+            _cache = {"sig": _sig, "data": zip_data, "exc": last_exc}
+            st.session_state["_zip_cache"] = _cache
+        zip_data, last_exc = _cache["data"], _cache["exc"]
         if zip_data is not None:
             st.download_button(
                 "Télécharger tous les clips (.zip)", zip_data, "clips.zip",
@@ -961,6 +992,7 @@ if st.session_state.get("clips"):
             render_clip_card(
                 clip, key=f"clip-{index}", selectable=bool(export_dir),
                 meta=clips_meta_saved[index] if index < len(clips_meta_saved) else None,
+                eager=index < _EAGER_CLIPS,
             )
 
     if export_dir:
@@ -1006,7 +1038,7 @@ if st.session_state.get("clips"):
 
     left, right = st.columns(2)
     if left.button("Régler à nouveau", use_container_width=True):
-        for key in ("clips", "clips_meta", "project_dir", "captions_skipped"):
+        for key in ("clips", "clips_meta", "_zip_cache", "project_dir", "captions_skipped"):
             st.session_state.pop(key, None)
         _forget_send_selection()
         st.rerun()
@@ -1375,6 +1407,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             render_clip_card(
                 Path(path), key=f"live-{n}",
                 meta=clips_meta[n] if n < len(clips_meta) else None,
+                eager=n < _EAGER_CLIPS,
             )
         counter["n"] += 1
 
