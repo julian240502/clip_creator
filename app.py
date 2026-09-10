@@ -250,8 +250,9 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         if is_twitch_vod(source["ref"]):
             _start = source_window[0] if source_window else None
             _end = source_window[1] if source_window else None
-            # `chat-downloader` peut se bloquer indéfiniment (retry Twitch) : on
-            # l'exécute dans un thread qu'on abandonne au bout de 90 s.
+            # download_chat est borné (cap temps interne), mais un très gros
+            # stream sur une longue fenêtre = beaucoup de pages : on l'exécute
+            # dans un thread qu'on abandonne au bout de 90 s par sécurité.
             _box: dict = {}
             _th = threading.Thread(
                 target=lambda: _box.setdefault(

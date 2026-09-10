@@ -2,9 +2,16 @@
 
 Le meilleur signal pour repérer un highlight sur un live : quand le chat
 explose (surtout en emotes de rire), il s'est passé quelque chose. On télécharge
-le chat du VOD (`chat-downloader`, optionnel), on repère les tranches où le débit
-de messages dépasse nettement sa base locale — pondéré par la densité d'emotes
-de rire — et on renvoie des instants (déjà corrigés du délai de réaction du chat).
+les commentaires du VOD via l'API GraphQL web de Twitch (aucune dépendance, pas
+d'authentification), on repère les tranches où le débit de messages dépasse
+nettement sa base locale — pondéré par la densité d'emotes de rire — et on
+renvoie des instants (déjà corrigés du délai de réaction du chat).
+
+Historique : on passait par `chat-downloader`, aujourd'hui cassé
+(`PersistedQueryNotFound`) et non maintenu. La pagination **par cursor** de
+l'API Twitch déclenche désormais un `IntegrityCheckFailed` (protection anti-bot).
+La pagination **par offset** (`contentOffsetSeconds`) passe sans jeton : c'est
+celle qu'on utilise ici.
 """
 
 from __future__ import annotations
@@ -13,14 +20,22 @@ import json
 import os
 import re
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
+# Client-ID web public de Twitch (le même pour tous les navigateurs, non secret).
+_TWITCH_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+_GQL_ENDPOINT = "https://gql.twitch.tv/gql"
+# Hash de la requête persistée « VideoCommentsByOffsetOrCursor » de l'API web.
+_VOD_COMMENTS_HASH = "b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044aa76adf6a"
+_GQL_TIMEOUT = 20.0
+
 # Le chat d'un très gros stream (Kai Cenat & co) = centaines de milliers de
-# messages, et `chat-downloader` pagine (rate-limit Twitch) — voire se bloque en
-# boucle de retry. Ce signal est **désactivé par défaut** (CLIP_CREATOR_ENABLE_CHAT=1
-# pour l'activer) et l'appelant l'exécute dans un thread borné. Ici on borne aussi :
-# échantillon représentatif suffit. CLIP_CREATOR_CHAT_MAX_SECONDS pour aller plus loin.
+# messages : chaque page GQL rend ~60-200 messages, donc une heure de chat dense
+# = beaucoup de requêtes. On borne : un échantillon représentatif suffit à la
+# détection de pics. CLIP_CREATOR_CHAT_MAX_SECONDS / _MESSAGES pour élargir.
 _CHAT_MAX_SECONDS = float(os.environ.get("CLIP_CREATOR_CHAT_MAX_SECONDS", "75") or 75)
 _CHAT_MAX_MESSAGES = int(os.environ.get("CLIP_CREATOR_CHAT_MAX_MESSAGES", "150000") or 150000)
 
@@ -39,6 +54,11 @@ def is_twitch_vod(url: str) -> bool:
     return "/videos/" in url or bool(re.search(r"twitch\.tv/videos/\d+", url))
 
 
+def _vod_id(url: str) -> str | None:
+    match = re.search(r"/videos/(\d+)", url)
+    return match.group(1) if match else None
+
+
 def _cache_file(
     url: str, cache_dir: str | Path, start: float | None, end: float | None,
 ) -> Path:
@@ -48,11 +68,101 @@ def _cache_file(
     return Path(cache_dir) / f"chat_{name}{span}.json"
 
 
+def _gql(body: list, *, timeout: float = _GQL_TIMEOUT) -> list | None:
+    """POST une requête GraphQL Twitch. `None` si réseau / réponse illisible."""
+    request = urllib.request.Request(
+        _GQL_ENDPOINT,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Client-ID": _TWITCH_CLIENT_ID, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def _fetch_vod_comments(
+    vod_id: str, start: float, end: float,
+) -> tuple[list[tuple[float, str]], bool]:
+    """Commentaires du VOD sur `[start, end]` (offsets secondes), triés.
+
+    Pagination **par offset uniquement** : on redemande la requête avec
+    `contentOffsetSeconds` = offset du dernier message reçu (le champ `cursor`
+    déclenche un `IntegrityCheckFailed`). Renvoie `(messages, tronqué)` ;
+    `tronqué` = un cap (temps / nombre) ou une erreur API a coupé la collecte.
+    """
+    deadline = time.monotonic() + _CHAT_MAX_SECONDS
+    seen: set[tuple[float, str]] = set()
+    out: list[tuple[float, str]] = []
+    offset = max(0.0, start)
+    truncated = False
+    stalls = 0
+
+    while offset < end:
+        if time.monotonic() > deadline or len(out) >= _CHAT_MAX_MESSAGES:
+            truncated = True
+            break
+        body = [{
+            "operationName": "VideoCommentsByOffsetOrCursor",
+            "variables": {"videoID": vod_id, "contentOffsetSeconds": int(offset)},
+            "extensions": {
+                "persistedQuery": {"version": 1, "sha256Hash": _VOD_COMMENTS_HASH},
+            },
+        }]
+        data = _gql(body)
+        if not data or not isinstance(data, list) or data[0].get("errors"):
+            # PersistedQueryNotFound / IntegrityCheckFailed / réseau : on garde
+            # ce qu'on a (un échantillon partiel nourrit quand même la détection).
+            truncated = truncated or bool(out)
+            break
+        comments = ((data[0].get("data") or {}).get("video") or {}).get("comments")
+        if not comments or not comments.get("edges"):
+            break
+
+        edges = comments["edges"]
+        last_offset = float(edges[-1]["node"]["contentOffsetSeconds"])
+        for edge in edges:
+            node = edge.get("node") or {}
+            t = float(node.get("contentOffsetSeconds", 0.0))
+            if t < start or t > end:
+                continue
+            text = "".join(
+                frag.get("text", "")
+                for frag in (node.get("message") or {}).get("fragments", [])
+            ).strip()
+            key = (t, text)
+            if text and key not in seen:
+                seen.add(key)
+                out.append(key)
+
+        if not comments.get("pageInfo", {}).get("hasNextPage") or last_offset > end:
+            break
+        if last_offset <= offset:  # la page n'a pas fait avancer l'offset
+            stalls += 1
+            if stalls > 20:
+                break
+            offset += 5.0
+        else:
+            stalls = 0
+            offset = last_offset + 0.001
+
+    out.sort(key=lambda item: item[0])
+    return out, truncated
+
+
 def download_chat(
     url: str, cache_dir: str | Path, *, start: float | None = None, end: float | None = None,
 ) -> list[tuple[float, str]] | None:
-    """`(offset_secondes_dans_le_VOD, message)`. `start`/`end` limitent le
-    téléchargement à cette fenêtre (les temps restent absolus). None si indispo."""
+    """`(offset_secondes_dans_le_VOD, message)`. `start`/`end` limitent la
+    collecte à cette fenêtre (les temps restent absolus). `None` si l'URL n'est
+    pas un VOD Twitch ou si l'API ne renvoie rien."""
+    if not is_twitch_vod(url):
+        return None
+    vod_id = _vod_id(url)
+    if not vod_id:
+        return None
+
     cache = _cache_file(url, cache_dir, start, end)
     if cache.is_file():
         try:
@@ -60,44 +170,19 @@ def download_chat(
             return [(float(t), str(m)) for t, m in data]
         except (OSError, ValueError):
             pass
-    try:
-        from chat_downloader import ChatDownloader
-    except ImportError:
+
+    lo = 0.0 if start is None else max(0.0, float(start))
+    hi = float("inf") if end is None else float(end)
+    messages, truncated = _fetch_vod_comments(vod_id, lo, hi)
+    if not messages:
         return None
-    deadline = time.monotonic() + _CHAT_MAX_SECONDS
-    truncated = False
-    out: list[tuple[float, str]] = []
-    try:
-        # `timeout` (inactivité) + `max_attempts` : `chat-downloader` doit finir
-        # par rendre la main même si Twitch rate-limite (sinon boucle de retry
-        # infinie). L'appelant l'exécute en plus dans un thread borné.
-        chat = ChatDownloader().get_chat(
-            url, message_types=["text_message"], start_time=start, end_time=end,
-            max_messages=_CHAT_MAX_MESSAGES, timeout=20, max_attempts=2,
-            retry_timeout=15,
-        )
-        for msg in chat:
-            t = msg.get("time_in_seconds")
-            text = msg.get("message") or ""
-            if t is not None and text:
-                out.append((float(t), str(text)))
-            if time.monotonic() > deadline:
-                truncated = True
-                break
-    except Exception:  # noqa: BLE001 - réseau / VOD sans chat / API changée
-        if not out:
-            return None
-        truncated = True
-    if not out:
-        return None
-    out.sort(key=lambda item: item[0])
     if not truncated:  # un échantillon partiel n'est pas remis en cache
         try:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+            cache.write_text(json.dumps(messages, ensure_ascii=False), encoding="utf-8")
         except OSError:
             pass
-    return out
+    return messages
 
 
 def chat_spikes(
