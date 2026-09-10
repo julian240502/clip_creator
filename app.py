@@ -161,7 +161,7 @@ def _forget_send_selection() -> None:
 
 def reset_source() -> None:
     for key in (
-        "source", "clips", "project_dir", "captions_skipped",
+        "source", "clips", "clips_meta", "project_dir", "captions_skipped",
         "style_preview", "style_preview_sig", "preview_at", "split_preview",
         "highlights", "highlights_model", "source_lang", "export_label",
         "chat_spikes", "chat_requested",
@@ -353,9 +353,43 @@ def _read_bytes_resilient(path: Path, attempts: int = 3, delay: float = 0.5) -> 
     return None
 
 
-def render_clip_card(clip: Path, key: str, *, selectable: bool = False) -> None:
+def _meta_badges_html(meta: dict | None) -> str:
+    """Petite ligne de badges sous un clip généré : viralité + accroche + chat."""
+    if not meta:
+        return ""
+    score = int(meta.get("score", 0))
+    tone = "#3ddc84" if score >= 75 else "#ffb020" if score >= 50 else "#ff5a5f"
+    parts = [
+        f"<span style='font-weight:800;color:{tone}'>{score}</span>"
+        "<span style='color:#9a9db0;font-size:.68rem'>&nbsp;viralité</span>"
+    ]
+    if meta.get("hook"):
+        parts.append(
+            "<span style='background:#123a2a;color:#3ddc84;border:1px solid #1f6b4a;"
+            "border-radius:999px;padding:.03rem .4rem;font-size:.66rem;font-weight:700;"
+            "white-space:nowrap'>⚡ Accroche forte</span>"
+        )
+    chat = float(meta.get("chat", 0.0))
+    if chat > 0:
+        parts.append(
+            "<span style='background:#241a3a;color:#c9a6ff;border:1px solid #9146ff;"
+            "border-radius:999px;padding:.03rem .4rem;font-size:.66rem;font-weight:700;"
+            f"white-space:nowrap'>⚡ Chat s'emballe&nbsp;{chat:.1f}</span>"
+        )
+    return (
+        "<div style='display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;"
+        "margin:.1rem 0 .4rem'>" + "".join(parts) + "</div>"
+    )
+
+
+def render_clip_card(
+    clip: Path, key: str, *, selectable: bool = False, meta: dict | None = None,
+) -> None:
     st.video(str(clip))
     st.caption(clip.name)
+    badges = _meta_badges_html(meta)
+    if badges:
+        st.markdown(badges, unsafe_allow_html=True)
     if selectable:
         sent = clip.name in st.session_state.get("sent_clips", set())
         st.checkbox(
@@ -920,10 +954,14 @@ if st.session_state.get("clips"):
     export_dir = st.session_state.get("export_dir", "").strip()
     export_label = st.session_state.get("export_label", "").strip()
 
+    clips_meta_saved = st.session_state.get("clips_meta") or []
     columns = st.columns(3)
     for index, clip in enumerate(clips):
         with columns[index % 3]:
-            render_clip_card(clip, key=f"clip-{index}", selectable=bool(export_dir))
+            render_clip_card(
+                clip, key=f"clip-{index}", selectable=bool(export_dir),
+                meta=clips_meta_saved[index] if index < len(clips_meta_saved) else None,
+            )
 
     if export_dir:
         n = len(clips)
@@ -968,7 +1006,7 @@ if st.session_state.get("clips"):
 
     left, right = st.columns(2)
     if left.button("Régler à nouveau", use_container_width=True):
-        for key in ("clips", "project_dir", "captions_skipped"):
+        for key in ("clips", "clips_meta", "project_dir", "captions_skipped"):
             st.session_state.pop(key, None)
         _forget_send_selection()
         st.rerun()
@@ -1161,6 +1199,7 @@ if not smart:
 # --- Phase 2.5 : choisir les moments (mode intelligent) -----------------------
 clips_windows: list[tuple[float, float]] | None = None
 clips_hints: list[tuple[str, str]] | None = None
+clips_meta: list[dict] = []  # par clip coché : score viral, accroche forte, pic chat
 gen_label = "Générer les clips  ✦"
 gen_disabled = False
 if smart:
@@ -1261,6 +1300,11 @@ if smart:
             if keep:
                 picks.append((float(item["start"]), float(item["end"])))
                 pick_hints.append((str(item["title"]), str(item["summary"])))
+                clips_meta.append({
+                    "score": int(item.get("score", 0)),
+                    "hook": int(item.get("hook_score", 0)) >= HOOK_STRONG,
+                    "chat": float(item.get("chat_intensity", 0.0)),
+                })
         clips_windows = picks
         clips_hints = pick_hints
 
@@ -1326,8 +1370,12 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
         status.caption(message)
 
     def on_clip(path: Path) -> None:
-        with live_columns[counter["n"] % 3]:
-            render_clip_card(Path(path), key=f"live-{counter['n']}")
+        n = counter["n"]
+        with live_columns[n % 3]:
+            render_clip_card(
+                Path(path), key=f"live-{n}",
+                meta=clips_meta[n] if n < len(clips_meta) else None,
+            )
         counter["n"] += 1
 
     try:
@@ -1357,6 +1405,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
         )
         st.session_state.project_dir = str(project_dir)
         st.session_state.clips = [str(clip) for clip in clips]
+        st.session_state["clips_meta"] = clips_meta
         st.session_state["captions_skipped"] = bool(
             captions_style is not None and not _transcript_has_words(str(project_dir))
         )
