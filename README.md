@@ -95,7 +95,25 @@ finaliste reçoit un **score de viralité /100**, un **titre**, un **résumé** 
 **justification** via Ollama (repli sur une notation heuristique si Ollama n'est pas lancé).
 Chaque extrait est aussi jaugé sur son **accroche** (les toutes premières secondes) : ceux
 qui ouvrent fort portent un badge **⚡ Accroche forte** et affichent la phrase d'accroche.
-Le hook ne filtre rien et ne change pas le classement — il ne fait que mettre en avant.
+
+### Type de contenu (pondération du score)
+
+Le score de viralité combine 4 signaux — **chat Twitch, ambiance (rires/cris), accroche,
+dialogue** — dont la priorité se règle via **« Type de contenu »** :
+
+- **Gaming / réaction** *(recommandé)* : chat & ambiance priorisés — pensé pour un
+  moment de gameplay/réaction où l'action et la réaction du public comptent plus que
+  l'éloquence du texte.
+- **Podcast / interview** : dialogue & accroche priorisés — pas d'action physique ni
+  de chat à attendre, c'est ce qui est dit qui fait le clip.
+- **Équilibré** : les 4 signaux pèsent à peu près pareil.
+
+Le chat ne pèse que sur un VOD Twitch **avec du chat récupéré** — sans ça (source non
+Twitch, case décochée, chat vide) son poids se redistribue automatiquement sur les 3
+autres signaux, pour qu'aucun extrait ne plafonne artificiellement bas faute de chat.
+Un extrait au texte quasi inexploitable (silence, transcription bruitée) voit son score
+amorti mais jamais annulé — un cri sans phrase claire doit pouvoir remonter sur le seul
+chat/ambiance.
 
 ### Signaux non textuels (rires / cris / chat)
 

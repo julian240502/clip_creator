@@ -5,6 +5,7 @@ import pytest
 from src import llm
 from src.highlights import (
     _BATCH_SIZE,
+    CONTENT_PROFILES,
     HOOK_STRONG,
     Highlight,
     _adaptive_batch_size,
@@ -19,10 +20,12 @@ from src.highlights import (
     _pre_score,
     _rate_batch_with_llm,
     _rate_heuristic,
+    _score_weights,
     _sentence_units,
     _short_label,
     _system_batch,
     _system_one,
+    _weighted_score,
     find_highlights,
 )
 from src.transcribe import Transcript, TranscriptSegment, Word
@@ -286,6 +289,47 @@ def test_rate_batch_with_llm_passes_a_sized_num_ctx(monkeypatch) -> None:
     assert long_ctx > short_ctx
 
 
+def test_content_profiles_all_sum_to_100() -> None:
+    for name, weights in CONTENT_PROFILES.items():
+        assert sum(weights) == pytest.approx(100.0), name
+
+
+def test_score_weights_uses_the_chosen_profile_when_chat_is_available() -> None:
+    assert _score_weights(chat_available=True, profile="gaming") == CONTENT_PROFILES["gaming"]
+    assert _score_weights(chat_available=True, profile="podcast") == CONTENT_PROFILES["podcast"]
+
+
+def test_score_weights_redistributes_chat_when_unavailable() -> None:
+    chat, energy, hook, dialogue = _score_weights(chat_available=False, profile="gaming")
+    assert chat == 0.0
+    # rien n'est perdu : la somme reste 100, et l'ordre relatif energy > hook >
+    # dialogue (celui du profil gaming) est préservé.
+    assert energy + hook + dialogue == pytest.approx(100.0)
+    assert energy > hook > dialogue
+
+
+def test_score_weights_unknown_profile_falls_back_to_default() -> None:
+    assert _score_weights(chat_available=True, profile="n'existe pas") == CONTENT_PROFILES["gaming"]
+
+
+def test_weighted_score_chat_dominates_under_the_gaming_profile() -> None:
+    weights = CONTENT_PROFILES["gaming"]
+    chat_heavy = _weighted_score(
+        dialogue_score=50, chat=1.0, energy=0.0, hook_score=0, weights=weights,
+    )
+    dialogue_heavy = _weighted_score(
+        dialogue_score=100, chat=0.0, energy=0.0, hook_score=0, weights=weights,
+    )
+    assert chat_heavy > dialogue_heavy
+
+
+def test_weighted_score_gate_dampens_near_empty_dialogue_but_never_to_zero() -> None:
+    weights = CONTENT_PROFILES["gaming"]
+    full_text = _weighted_score(dialogue_score=15, chat=1.0, energy=1.0, hook_score=100, weights=weights)
+    empty_text = _weighted_score(dialogue_score=0, chat=1.0, energy=1.0, hook_score=100, weights=weights)
+    assert 0 < empty_text < full_text  # amorti, pas annulé -> un cri sans texte reste retenu
+
+
 def test_find_highlights_heuristic_only_is_sorted_and_bounded() -> None:
     result = find_highlights(_transcript(), target_count=3, min_duration=18.0, max_duration=45.0)
     assert 1 <= len(result) <= 3
@@ -327,6 +371,21 @@ def test_find_highlights_seeds_a_window_from_a_chat_spike() -> None:
     assert covering, "le pic de chat doit être couvert par un extrait"
     # L'intensité du pic est portée par un champ dédié (badge UI), pas par reasons.
     assert any(h.chat_intensity >= 4.0 for h in covering)
+
+
+def test_find_highlights_content_profile_changes_how_much_the_chat_spike_counts() -> None:
+    """Même pic de chat, même transcript : le profil gaming doit le valoriser
+    bien plus que le profil podcast (dialogue & accroche priorisés)."""
+    spike_t = 48.0
+    kwargs = dict(
+        target_count=6, min_duration=18.0, max_duration=45.0, chat_spikes=[(spike_t, 4.5)],
+    )
+    gaming = find_highlights(_transcript(), content_profile="gaming", **kwargs)
+    podcast = find_highlights(_transcript(), content_profile="podcast", **kwargs)
+
+    gaming_hit = next(h for h in gaming if h.start <= spike_t <= h.end)
+    podcast_hit = next(h for h in podcast if h.start <= spike_t <= h.end)
+    assert gaming_hit.score > podcast_hit.score
 
 
 def test_find_highlights_audio_intensity_lifts_the_hot_window() -> None:

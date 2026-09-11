@@ -136,6 +136,14 @@ BACKGROUND_CHOICES = {
     "Recadrage sur le visage (podcast / interview)": "reframe",
     "Réaction haut / bas (facecam + gameplay)": "split",
 }
+# Sélection intelligente : priorité des 4 signaux du score de viralité (voir
+# src.highlights.CONTENT_PROFILES). Choix manuel — pas de détection auto, trop
+# de façons de se tromper sur un simple VOD.
+CONTENT_PROFILE_CHOICES = {
+    "Gaming / réaction — chat & ambiance priorisés — recommandé": "gaming",
+    "Podcast / interview — dialogue & accroche priorisés": "podcast",
+    "Équilibré": "balanced",
+}
 FORMAT_CHOICES = {
     "9:16 · Vertical": "9:16",
     "4:5 · Portrait": "4:5",
@@ -233,6 +241,7 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
                        dur_min: float, dur_max: float,
                        source_window: tuple[float, float] | None = None,
                        use_chat: bool = False,
+                       content_profile: str = "gaming",
                        progress=None,
                        ) -> tuple[list[dict], str | None, str]:
     """Télécharge (si URL), transcrit, note les moments et en extrait une vignette."""
@@ -325,6 +334,7 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
         transcript, target_count=target_count,
         min_duration=float(dur_min), max_duration=float(dur_max), model=model,
         source_window=source_window, audio_curve=audio_curve, chat_spikes=chat_spikes,
+        content_profile=content_profile,
     )
     _done(f"Notation ({model or 'heuristique'})")
     thumbs_dir = session_dir() / "highlights"
@@ -1276,6 +1286,15 @@ else:
         )
         + (f" · modèle `{rater}`" if ADVANCED and rater else "")
     )
+    content_profile = CONTENT_PROFILE_CHOICES[st.selectbox(
+        "Type de contenu", list(CONTENT_PROFILE_CHOICES),
+        help=(
+            "Fixe ce qui compte le plus dans le score de viralité : chat Twitch, "
+            "ambiance (rires/cris), accroche, ou qualité du dialogue. Le chat ne "
+            "pèse de toute façon que sur un VOD Twitch avec du chat récupéré — "
+            "sinon son poids se redistribue automatiquement sur les 3 autres."
+        ),
+    )]
     smart_window: tuple[float, float] | None = None
     if duration:
         opts = _portion_options(duration)
@@ -1320,7 +1339,8 @@ else:
             try:
                 found, used, src_lang = analyse_highlights(
                     source, quality_key, target_count, dur_min, dur_max,
-                    source_window=smart_window, use_chat=use_chat, progress=_log,
+                    source_window=smart_window, use_chat=use_chat,
+                    content_profile=content_profile, progress=_log,
                 )
                 st.session_state["highlights"] = found
                 st.session_state["highlights_model"] = used

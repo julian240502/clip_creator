@@ -292,6 +292,64 @@ def _chat_peak(start: float, end: float, spikes: list[tuple[float, float]] | Non
     return round(max(hits), 2) if hits else 0.0
 
 
+# Score de viralité : pondération par priorité de signal (chat > ambiance >
+# accroche > dialogue), réglable par profil de contenu — l'utilisateur choisit
+# (pas de détection auto : trop de façons de se tromper sur un simple VOD).
+# Chaque profil est (chat, énergie, hook, dialogue), toujours somme 100.
+CONTENT_PROFILES: dict[str, tuple[float, float, float, float]] = {
+    "gaming": (40.0, 25.0, 20.0, 15.0),      # gaming / réaction : chat & ambiance priorisés
+    "podcast": (5.0, 15.0, 35.0, 45.0),      # podcast / interview : dialogue & accroche priorisés
+    "balanced": (20.0, 20.0, 30.0, 30.0),    # équilibré
+}
+DEFAULT_CONTENT_PROFILE = "gaming"
+# En dessous de ce score dialogue (texte quasi inexploitable : silence,
+# transcription bruitée…), le score final est amorti — pas mis à zéro, un cri
+# sans phrase claire doit pouvoir remonter sur le seul chat/ambiance.
+_DIALOGUE_GATE_FLOOR = 15.0
+
+
+def _score_weights(
+    *, chat_available: bool, profile: str = DEFAULT_CONTENT_PROFILE,
+) -> tuple[float, float, float, float]:
+    """(chat, énergie, hook, dialogue) du profil demandé (repli sur le profil
+    par défaut si inconnu). Le chat n'existe que sur un VOD Twitch **avec du
+    chat récupéré** — quand ce n'est pas le cas (source non-Twitch, case
+    décochée, chat vide/échoué), son poids ne se perd pas : il se redistribue
+    au prorata sur les trois autres, sinon chaque extrait plafonnerait
+    artificiellement bas pour une raison qui n'a rien à voir avec sa qualité.
+    """
+    w_chat, w_energy, w_hook, w_dialogue = CONTENT_PROFILES.get(
+        profile, CONTENT_PROFILES[DEFAULT_CONTENT_PROFILE],
+    )
+    if chat_available or w_chat <= 0:
+        return w_chat, w_energy, w_hook, w_dialogue
+    rest = w_energy + w_hook + w_dialogue
+    if rest <= 0:
+        return 0.0, w_energy, w_hook, w_dialogue
+    scale = (w_chat + rest) / rest
+    return 0.0, w_energy * scale, w_hook * scale, w_dialogue * scale
+
+
+def _weighted_score(
+    *, dialogue_score: float, chat: float, energy: float, hook_score: float,
+    weights: tuple[float, float, float, float],
+) -> int:
+    """Score 0-100 : somme pondérée des 4 signaux (chat, énergie, hook,
+    dialogue — chacun 0..1), amortie sous `_DIALOGUE_GATE_FLOOR` (voir plus
+    haut) pour ne pas laisser un pic isolé porter un extrait vide de contenu.
+    """
+    w_chat, w_energy, w_hook, w_dialogue = weights
+    if dialogue_score >= _DIALOGUE_GATE_FLOOR:
+        gate = 1.0
+    else:
+        gate = 0.6 + 0.4 * (dialogue_score / _DIALOGUE_GATE_FLOOR)
+    raw = (
+        w_chat * chat + w_energy * energy
+        + w_hook * (hook_score / 100.0) + w_dialogue * (dialogue_score / 100.0)
+    )
+    return max(0, min(100, round(gate * raw)))
+
+
 def _dedupe(
     scored: list[tuple[float, float, str, float]], overlap: float = 0.5,
 ) -> list[tuple[float, float, str, float]]:
@@ -550,8 +608,13 @@ def find_highlights(
     source_window: tuple[float, float] | None = None,
     audio_curve: tuple[list[float], float, float] | None = None,
     chat_spikes: list[tuple[float, float]] | None = None,
+    content_profile: str = DEFAULT_CONTENT_PROFILE,
 ) -> list[Highlight]:
     """Renvoie les meilleurs extraits, classés par score décroissant.
+
+    `content_profile` (voir `CONTENT_PROFILES`) fixe la priorité des 4 signaux
+    du score : `"gaming"` (chat & ambiance priorisés), `"podcast"` (dialogue &
+    accroche priorisés) ou `"balanced"`.
 
     `source_window` restreint les extraits candidats à `(start, end)` de la source
     — pratique pour une rediff de live : on cadre sur la partie active.
@@ -593,6 +656,7 @@ def find_highlights(
 
     use_llm = model is not None
     batch_size = _adaptive_batch_size(max_duration)
+    weights = _score_weights(chat_available=bool(chat_spikes), profile=content_profile)
     highlights: list[Highlight] = []
     for offset in range(0, len(finalists), batch_size):
         chunk = finalists[offset : offset + batch_size]
@@ -629,7 +693,10 @@ def find_highlights(
             # Le chat s'emballe -> badge dédié dans l'UI (chat_intensity), pas dans reasons.
             if energy >= 0.5:
                 reasons.insert(0, "🔊 Pic d'intensité (rires / cris)")
-            score = min(100, rated["score"] + round(18 * chat + 10 * energy))
+            score = _weighted_score(
+                dialogue_score=rated["score"], chat=chat, energy=energy,
+                hook_score=hook_score, weights=weights,
+            )
             highlights.append(
                 Highlight(
                     start=round(max(0.0, start - _LEAD_IN), 2), end=end,
