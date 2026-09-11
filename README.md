@@ -110,7 +110,12 @@ En plus du texte, deux signaux d'intensité entrent dans le score :
   liste les pics repérés (horodatage + intensité). La collecte est bornée
   (75 s d'horloge / `CLIP_CREATOR_CHAT_MAX_SECONDS`, 150 k messages) et tourne
   dans un thread **abandonné au bout de 90 s** s'il traîne (l'analyse continue
-  sans le chat) — utile sur un très gros stream où le chat est énorme.
+  sans le chat) — utile sur un très gros stream où le chat est énorme. Sur une
+  **longue portion et un chat très dense** (mega-streamer), lire depuis le
+  début n'atteindrait jamais la fin dans ce budget : le débit réel est mesuré
+  d'abord, et si tout couvrir en continu ne tient pas dans le temps imparti,
+  la collecte passe automatiquement à des **sondes réparties sur toute la
+  portion analysée** plutôt que de tout consommer sur les premières minutes.
 
 L'écran « moments détectés » liste les extraits classés par score ; on coche ceux à
 produire et seuls ceux-là sont rendus (sous-titres compris).

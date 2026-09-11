@@ -149,3 +149,104 @@ def test_download_chat_keeps_partial_sample_on_mid_stream_error(tmp_path, monkey
     out = download_chat("https://www.twitch.tv/videos/123", tmp_path)
     assert out == [(10.0, "a"), (20.0, "b")]
     assert not (tmp_path / "chat_123.json").is_file()  # tronqué -> pas de cache
+
+
+def test_spikes_from_probes_flags_the_outlier_against_the_median() -> None:
+    probes = [{"t": i * 100.0, "rate": 5.0, "laugh_frac": 0.0} for i in range(10)]
+    probes[4] = {"t": 400.0, "rate": 40.0, "laugh_frac": 0.5}
+    spikes = twitch_chat._spikes_from_probes(probes)
+    assert len(spikes) == 1
+    assert abs(spikes[0][0] - (400.0 - 3.5)) < 0.01  # recalé du délai (lag)
+
+
+def test_spikes_from_probes_needs_at_least_five_probes() -> None:
+    probes = [{"t": 0.0, "rate": 100.0, "laugh_frac": 1.0}] * 4
+    assert twitch_chat._spikes_from_probes(probes) == []
+
+
+def test_find_chat_spikes_uses_the_sequential_path_on_a_light_window(
+    tmp_path, monkeypatch,
+) -> None:
+    """Petite fenêtre, chat calme : marche séquentielle habituelle, même résultat
+    qu'appeler chat_spikes() à la main — pas de bascule en sondes inutile."""
+    msgs = _steady(6, 20)
+    msgs += [(603.0 + i * 0.05, "KEKW" if i % 2 else "LMAO") for i in range(40)]
+    msgs.sort()
+    page = _gql_page(msgs, has_next=False)
+    calls: list[dict] = []
+
+    def _fake_gql(body, *, timeout=20.0):
+        calls.append(body[0]["variables"])
+        return page
+
+    monkeypatch.setattr(twitch_chat, "_gql", _fake_gql)
+    spikes = twitch_chat.find_chat_spikes(
+        "https://www.twitch.tv/videos/321", tmp_path, start=0, end=1200,
+    )
+    assert spikes == chat_spikes(msgs)
+    assert all("cursor" not in v for v in calls)
+    assert {v["contentOffsetSeconds"] for v in calls} == {0}  # un seul offset visité
+    assert (tmp_path / "spikes_chat_321_0-1200.json").is_file()
+
+
+def test_find_chat_spikes_samples_the_whole_window_when_chat_is_too_dense(
+    tmp_path, monkeypatch,
+) -> None:
+    """Fenêtre de 8h, chat dense (mega-streamer) : marcher depuis le début
+    n'atteindrait jamais la fin -> des sondes réparties sur TOUTE la fenêtre
+    doivent quand même trouver le pic, loin du début."""
+    window_end = 28800.0  # 8h
+    target = 14400.0  # 4h, au milieu de la fenêtre
+    calls: list[float] = []
+
+    def _fake_gql(body, *, timeout=20.0):
+        off = body[0]["variables"]["contentOffsetSeconds"]
+        calls.append(off)
+        near_target = abs(off - target) < 300
+        n = 200 if near_target else 40
+        step = 4.0 / n  # même durée de page (~4s) quel que soit le débit
+        rows = [
+            (off + i * step, "KEKW" if near_target and i % 3 == 0 else "hey")
+            for i in range(n)
+        ]
+        return _gql_page(rows, has_next=True)
+
+    monkeypatch.setattr(twitch_chat, "_gql", _fake_gql)
+    spikes = twitch_chat.find_chat_spikes(
+        "https://www.twitch.tv/videos/555", tmp_path, start=0, end=window_end,
+    )
+    assert spikes, "un pic net doit ressortir malgré un chat très dense"
+    assert any(abs(t - target) < 600 for t, _ in spikes)
+    # les sondes couvrent toute la fenêtre, pas seulement les premières minutes
+    assert max(calls) > window_end * 0.5
+    assert len(calls) < 200  # budget respecté (pas une marche séquentielle)
+
+
+def test_find_chat_spikes_caches_and_skips_refetching(tmp_path, monkeypatch) -> None:
+    page = _gql_page([(5.0, "hey"), (6.0, "hey")], has_next=False)
+    calls = {"n": 0}
+
+    def _fake_gql(body, *, timeout=20.0):
+        calls["n"] += 1
+        return page
+
+    monkeypatch.setattr(twitch_chat, "_gql", _fake_gql)
+    first = twitch_chat.find_chat_spikes(
+        "https://www.twitch.tv/videos/777", tmp_path, start=0, end=100,
+    )
+    made_on_first_call = calls["n"]
+    assert made_on_first_call > 0
+
+    second = twitch_chat.find_chat_spikes(
+        "https://www.twitch.tv/videos/777", tmp_path, start=0, end=100,
+    )
+    assert calls["n"] == made_on_first_call  # relu depuis le cache, pas de re-fetch
+    assert second == first
+
+
+def test_find_chat_spikes_ignores_non_twitch_urls(tmp_path, monkeypatch) -> None:
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("l'API ne doit pas être appelée")
+
+    monkeypatch.setattr(twitch_chat, "_gql", _boom)
+    assert twitch_chat.find_chat_spikes("https://youtube.com/watch?v=abc", tmp_path) is None

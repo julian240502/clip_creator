@@ -260,19 +260,20 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
     _env_chat = os.environ.get("CLIP_CREATOR_ENABLE_CHAT", "").strip().lower() in {"1", "true", "on"}
     _chat_on = use_chat or _env_chat
     if _chat_on and source["kind"] == "url":
-        from src.twitch_chat import chat_spikes as _compute_spikes
-        from src.twitch_chat import download_chat, is_twitch_vod
+        from src.twitch_chat import find_chat_spikes, is_twitch_vod
 
         if is_twitch_vod(source["ref"]):
             _start = source_window[0] if source_window else None
             _end = source_window[1] if source_window else None
-            # download_chat est borné (cap temps interne), mais un très gros
-            # stream sur une longue fenêtre = beaucoup de pages : on l'exécute
-            # dans un thread qu'on abandonne au bout de 90 s par sécurité.
+            # find_chat_spikes est borné (cap temps interne) et choisit seul
+            # comment collecter (marche séquentielle ou sondes sur toute la
+            # fenêtre selon le débit réel — voir sa docstring), mais un très
+            # gros stream reste une inconnue : thread abandonné à 90 s par
+            # sécurité.
             _box: dict = {}
             _th = threading.Thread(
                 target=lambda: _box.setdefault(
-                    "msgs", download_chat(source["ref"], session_dir(), start=_start, end=_end),
+                    "spikes", find_chat_spikes(source["ref"], session_dir(), start=_start, end=_end),
                 ),
                 daemon=True,
             )
@@ -280,8 +281,7 @@ def analyse_highlights(source: dict, quality_key: str, target_count: int,
             _th.join(timeout=90)
             if _th.is_alive() and progress:
                 progress("Chat Twitch : trop lent, abandonné — on continue sans")
-            _msgs = _box.get("msgs")
-            chat_spikes = _compute_spikes(_msgs) if _msgs else None
+            chat_spikes = _box.get("spikes") or None
     # Rendu visible dans l'écran « moments détectés » (feedback : le signal a-t-il servi).
     st.session_state["chat_spikes"] = chat_spikes or []
     st.session_state["chat_requested"] = bool(_chat_on)
