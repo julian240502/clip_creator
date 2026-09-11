@@ -462,6 +462,16 @@ def render_clip_card(
             st.checkbox("Envoyer vers le dossier · ✓ déjà copié", key=f"send-{key}", disabled=True)
         return
 
+    # Case "Envoyer" affichée AVANT l'aperçu, à une position fixe : sinon un
+    # lecteur vidéo qui apparaît au clic sur "Afficher l'aperçu" la repousse
+    # plus bas dans une colonne étroite, et elle donne l'impression d'avoir
+    # disparu.
+    if selectable:
+        st.checkbox(
+            "Envoyer vers le dossier" + (" · ✓ déjà copié" if sent else ""),
+            key=f"send-{key}",
+        )
+
     vid_key = f"vid-{key}"
     shown = eager or st.session_state.get(vid_key, False)
     if shown:
@@ -470,11 +480,6 @@ def render_clip_card(
         st.session_state[vid_key] = True
         st.rerun()
 
-    if selectable:
-        st.checkbox(
-            "Envoyer vers le dossier" + (" · ✓ déjà copié" if sent else ""),
-            key=f"send-{key}",
-        )
     sidecar = clip.with_suffix(".txt")
     if sidecar.is_file():
         with st.expander("Titre & hashtags"):
