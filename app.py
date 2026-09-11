@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import io
 import json
 import math
 import os
@@ -967,10 +968,12 @@ if st.session_state.get("clips"):
 
     project_dir = st.session_state.get("project_dir")
     if project_dir:
-        archive_path = Path(project_dir) / "clip-creator-exports.zip"
         # L'archive était reconstruite (lecture de tous les clips) à CHAQUE rerun —
         # une case cochée bloquait alors le serveur média et les <video> ne
         # chargeaient plus. On ne (re)construit que si la liste des clips change.
+        # Gardée UNIQUEMENT en mémoire (pas écrite dans project_dir) : un fichier
+        # .zip sur disque doublait bêtement l'espace utilisé par le projet pour
+        # un archive qui ne sert qu'au bouton "Télécharger tout" ci-dessous.
         _sig = tuple(
             (c.name, c.stat().st_size if c.exists() else 0) for c in clips
         )
@@ -980,7 +983,8 @@ if st.session_state.get("clips"):
             last_exc: OSError | None = None
             for _ in range(3):
                 try:
-                    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
                         for clip in clips:
                             if not clip.exists():
                                 continue  # déjà envoyé vers le dossier puis supprimé du cache
@@ -988,7 +992,7 @@ if st.session_state.get("clips"):
                             sidecar = clip.with_suffix(".txt")
                             if sidecar.is_file():
                                 archive.write(sidecar, sidecar.name)
-                    zip_data = archive_path.read_bytes()
+                    zip_data = buffer.getvalue()
                     break
                 except OSError as exc:
                     last_exc = exc
