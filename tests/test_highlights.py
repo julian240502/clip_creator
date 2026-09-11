@@ -21,6 +21,7 @@ from src.highlights import (
     _rate_batch_with_llm,
     _rate_heuristic,
     _score_weights,
+    _seed_windows_from_spikes,
     _sentence_units,
     _short_label,
     _system_batch,
@@ -371,6 +372,41 @@ def test_find_highlights_seeds_a_window_from_a_chat_spike() -> None:
     assert covering, "le pic de chat doit être couvert par un extrait"
     # L'intensité du pic est portée par un champ dédié (badge UI), pas par reasons.
     assert any(h.chat_intensity >= 4.0 for h in covering)
+
+
+def test_seed_windows_from_spikes_starts_well_before_the_spike() -> None:
+    """Le chat réagit après coup : la fenêtre doit démarrer avant l'emballement
+    (contexte qui y mène), pas dessus (qui coupe ce qui l'a déclenché)."""
+    segments = [
+        _seg(i * 15.0, i * 15.0 + 12.0, f"Phrase numero {i} qui dure douze secondes pile")
+        for i in range(10)  # unités à 0, 15, 30 … 135
+    ]
+    tr = Transcript(language="fr", duration=150.0, model="test", segments=segments)
+    units = _sentence_units(tr)
+    spike_t = 120.0
+
+    windows = _seed_windows_from_spikes(
+        units, [(spike_t, 4.0)], min_dur=10.0, max_dur=200.0, existing=[],
+    )
+    assert windows
+    start, end, _text = windows[0]
+    assert start <= spike_t - 25.0, "doit démarrer nettement avant le pic (~30 s)"
+    assert start <= spike_t <= end, "la fenêtre doit quand même couvrir le pic"
+
+
+def test_seed_windows_from_spikes_skips_a_spike_it_cannot_lead_into() -> None:
+    """max_dur trop court pour reculer de 30 s ET couvrir le pic -> on saute
+    plutôt que produire une fenêtre qui ne couvre pas l'instant qu'elle est
+    censée mettre en avant."""
+    segments = [_seg(i * 5.0, i * 5.0 + 4.0, f"Mot {i}") for i in range(30)]
+    tr = Transcript(language="fr", duration=150.0, model="test", segments=segments)
+    units = _sentence_units(tr)
+    spike_t = 100.0
+
+    windows = _seed_windows_from_spikes(
+        units, [(spike_t, 4.0)], min_dur=5.0, max_dur=8.0, existing=[],
+    )
+    assert windows == []
 
 
 def test_find_highlights_content_profile_changes_how_much_the_chat_spike_counts() -> None:

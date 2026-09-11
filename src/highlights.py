@@ -236,30 +236,47 @@ def _pre_score(text: str, duration: float) -> float:
     return max(0.0, min(1.0, score))
 
 
+_CHAT_SPIKE_LEAD_IN = 30.0  # démarrer la fenêtre ~30 s avant l'emballement, pas dessus
+
+
 def _seed_windows_from_spikes(
     units: list, spikes: list[tuple[float, float]], *,
     min_dur: float, max_dur: float, existing: list[tuple[float, float, str]],
 ) -> list[tuple[float, float, str]]:
     """Fenêtres candidates ancrées sur les pics de chat pas déjà couverts par une
     fenêtre existante — un moment où le chat explose devient un extrait même si
-    le texte, seul, ne l'aurait pas retenu."""
+    le texte, seul, ne l'aurait pas retenu.
+
+    Démarre `_CHAT_SPIKE_LEAD_IN` avant le pic, pas dessus : le chat réagit
+    **après coup** (déjà recalé de son délai de lecture dans `chat_spikes()`),
+    donc démarrer pile sur l'emballement coupe le moment qui l'a déclenché —
+    on veut le contexte qui mène au pic, pas juste sa retombée.
+    """
     out: list[tuple[float, float, str]] = []
     for spike_t, _intensity in spikes:
         if any(s <= spike_t <= e for s, e, _ in existing + out):
             continue
-        i = max((k for k in range(len(units)) if units[k].start <= spike_t + 0.5), default=0)
+        anchor = max(0.0, spike_t - _CHAT_SPIKE_LEAD_IN)
+        i = max((k for k in range(len(units)) if units[k].start <= anchor + 0.5), default=0)
         if _DANGLING_RE.match(units[i].text) and i + 1 < len(units):
             i += 1
         j = i
-        while j < len(units) and units[j].end - units[i].start < min_dur:
+        # Il faut à la fois min_dur ET couvrir l'instant du pic (l'ancrage a
+        # reculé le début, l'extension doit encore atteindre spike_t) — borné
+        # par max_dur : si l'atteindre dépasserait le plafond, on s'arrête
+        # court plutôt que de le dépasser (le check plus bas écarte alors ce
+        # pic, faute de pouvoir à la fois reculer et le couvrir).
+        while j < len(units) and units[j].end - units[i].start < max_dur and (
+            units[j].end - units[i].start < min_dur or units[j].end < spike_t
+        ):
             j += 1
         if j >= len(units):
             continue
         while j + 1 < len(units) and units[j + 1].end - units[i].start <= max_dur * 0.9:
             j += 1
         start, end = units[i].start, units[j].end
-        if end - start < min_dur * 0.8:
-            continue
+        if end - start < min_dur * 0.8 or not (start <= spike_t <= end):
+            continue  # max_dur trop court pour reculer de 30 s ET couvrir le pic
         text = " ".join(units[k].text for k in range(i, j + 1)).strip()
         out.append((round(start, 2), round(end, 2), text))
     return out

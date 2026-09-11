@@ -131,7 +131,9 @@ En plus du texte, deux signaux d'intensité entrent dans le score :
   nettement sa base locale — surtout en emotes de rire (KEKW, OMEGALUL…) —
   c'est un **moment potentiellement viral** ;
   ces instants (recalés du délai de réaction du chat) **créent une fenêtre
-  candidate** et portent un **⚡ Le chat s'emballe**. L'écran « moments détectés »
+  candidate qui démarre ~30 s avant l'emballement** (le chat réagit après coup —
+  commencer pile dessus couperait ce qui l'a déclenché) et portent un
+  **⚡ Le chat s'emballe**. L'écran « moments détectés »
   liste les pics repérés (horodatage + intensité). La collecte est bornée
   (75 s d'horloge / `CLIP_CREATOR_CHAT_MAX_SECONDS`, 150 k messages) et tourne
   dans un thread **abandonné au bout de 90 s** s'il traîne (l'analyse continue
