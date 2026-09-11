@@ -470,23 +470,24 @@ def render_clip_card(
         with st.expander("Titre & hashtags"):
             st.code(sidecar.read_text(encoding="utf-8"), language=None)
 
-    # Lire le fichier entier pour le bouton "Télécharger" n'est plus lié à
-    # l'aperçu vidéo (eager) : la plupart des sessions n'utilisent que l'envoi
-    # vers le dossier (Drive…), jamais le téléchargement local — inutile de
-    # relire les octets de 3 gros clips à CHAQUE rerun (une case cochée
-    # ailleurs sur l'écran, par ex.) pour un bouton qui ne sert jamais.
-    dl_key = f"dl-{key}"
-    dl_data = st.session_state.get(dl_key)
-    if dl_data is None and st.button(
-        "Préparer le téléchargement", key=f"prep-{key}", use_container_width=True,
-    ):
-        dl_data = _read_bytes_resilient(clip)
-        st.session_state[dl_key] = dl_data
-    if dl_data is not None:
-        st.download_button(
-            "Télécharger", dl_data, clip.name, "video/mp4",
-            key=key, use_container_width=True,
-        )
+    # Repliée par défaut, et lire le fichier entier n'est plus lié à l'aperçu
+    # vidéo (eager) : la plupart des sessions n'utilisent que l'envoi vers le
+    # dossier (Drive…), jamais le téléchargement local — inutile de relire les
+    # octets de 3 gros clips à CHAQUE rerun (une case cochée ailleurs sur
+    # l'écran, par ex.) pour un bouton qui ne sert jamais.
+    with st.expander("Téléchargement local", expanded=False):
+        dl_key = f"dl-{key}"
+        dl_data = st.session_state.get(dl_key)
+        if dl_data is None and st.button(
+            "Préparer le téléchargement", key=f"prep-{key}", use_container_width=True,
+        ):
+            dl_data = _read_bytes_resilient(clip)
+            st.session_state[dl_key] = dl_data
+        if dl_data is not None:
+            st.download_button(
+                "Télécharger", dl_data, clip.name, "video/mp4",
+                key=key, use_container_width=True,
+            )
 
 
 def _preview_source(source: dict, at: float, seconds: float = 4.0, max_height: int = 480) -> Path:
@@ -1018,40 +1019,43 @@ if st.session_state.get("clips"):
         zip_data: bytes | None = _cache.get("data") if _cache.get("sig") == _sig else None
         last_exc: OSError | None = _cache.get("exc") if _cache.get("sig") == _sig else None
 
-        if zip_data is None and st.button(
-            "Préparer l'archive de tous les clips (.zip)", use_container_width=True,
-        ):
-            with st.spinner("Compression des clips…"):
-                for _ in range(3):
-                    try:
-                        buffer = io.BytesIO()
-                        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
-                            for clip in clips:
-                                if not clip.exists():
-                                    continue  # déjà envoyé vers le dossier puis supprimé du cache
-                                archive.write(clip, clip.name)
-                                sidecar = clip.with_suffix(".txt")
-                                if sidecar.is_file():
-                                    archive.write(sidecar, sidecar.name)
-                        zip_data = buffer.getvalue()
-                        last_exc = None
-                        break
-                    except OSError as exc:
-                        last_exc = exc
-                        time.sleep(0.5)
-            st.session_state["_zip_cache"] = {"sig": _sig, "data": zip_data, "exc": last_exc}
+        # Repliée par défaut : la plupart des sessions n'utilisent que l'envoi
+        # vers le dossier (Drive…) plus bas, jamais le téléchargement local.
+        with st.expander("Téléchargement local (.zip)", expanded=False):
+            if zip_data is None and st.button(
+                "Préparer l'archive de tous les clips (.zip)", use_container_width=True,
+            ):
+                with st.spinner("Compression des clips…"):
+                    for _ in range(3):
+                        try:
+                            buffer = io.BytesIO()
+                            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
+                                for clip in clips:
+                                    if not clip.exists():
+                                        continue  # déjà envoyé vers le dossier puis supprimé du cache
+                                    archive.write(clip, clip.name)
+                                    sidecar = clip.with_suffix(".txt")
+                                    if sidecar.is_file():
+                                        archive.write(sidecar, sidecar.name)
+                            zip_data = buffer.getvalue()
+                            last_exc = None
+                            break
+                        except OSError as exc:
+                            last_exc = exc
+                            time.sleep(0.5)
+                st.session_state["_zip_cache"] = {"sig": _sig, "data": zip_data, "exc": last_exc}
 
-        if zip_data is not None:
-            st.download_button(
-                "Télécharger tous les clips (.zip)", zip_data, "clips.zip",
-                "application/zip", use_container_width=True,
-            )
-        elif last_exc is not None:
-            st.warning(
-                "Impossible de préparer l'archive ZIP — le dossier est probablement "
-                f"synchronisé (OneDrive, Google Drive…) et verrouille un fichier. "
-                f"Télécharge les clips un par un en attendant. ({last_exc})"
-            )
+            if zip_data is not None:
+                st.download_button(
+                    "Télécharger tous les clips (.zip)", zip_data, "clips.zip",
+                    "application/zip", use_container_width=True,
+                )
+            elif last_exc is not None:
+                st.warning(
+                    "Impossible de préparer l'archive ZIP — le dossier est probablement "
+                    f"synchronisé (OneDrive, Google Drive…) et verrouille un fichier. "
+                    f"Télécharge les clips un par un en attendant. ({last_exc})"
+                )
 
     export_dir = st.session_state.get("export_dir", "").strip()
     export_label = st.session_state.get("export_label", "").strip()
