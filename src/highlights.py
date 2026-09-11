@@ -308,6 +308,44 @@ def _dedupe(
     return kept
 
 
+# Deux extraits notés séparément qui se suivent quasiment sans coupure sont, en
+# pratique, la suite l'un de l'autre — _dedupe ne traite que le chevauchement
+# (> 50 % du plus court), pas la simple contiguïté.
+_ADJACENT_GAP = 6.0  # secondes
+
+
+def _merge_adjacent_highlights(
+    highlights: list[Highlight], *, max_duration: float, gap: float = _ADJACENT_GAP,
+) -> list[Highlight]:
+    """Fusionne deux extraits retenus qui se touchent ou se chevauchent avec un
+    petit écart (< `gap`), tant que l'union tient dans `max_duration` — sinon
+    ils restent deux extraits distincts (le classement par score tranche)."""
+    if len(highlights) < 2:
+        return highlights
+    ordered = sorted(highlights, key=lambda h: h.start)
+    merged: list[Highlight] = [ordered[0]]
+    for current in ordered[1:]:
+        prev = merged[-1]
+        union_start, union_end = min(prev.start, current.start), max(prev.end, current.end)
+        if current.start - prev.end <= gap and union_end - union_start <= max_duration:
+            # Le hook vient forcément de celui qui commence en premier (ce sont
+            # ses toutes premières secondes qui ouvrent le clip fusionné) ; le
+            # reste (titre/résumé) vient du mieux noté des deux.
+            first, second = (prev, current) if prev.start <= current.start else (current, prev)
+            better = prev if prev.score >= current.score else current
+            merged[-1] = Highlight(
+                start=union_start, end=union_end, score=max(prev.score, current.score),
+                title=better.title, summary=better.summary,
+                reasons=list(dict.fromkeys(prev.reasons + current.reasons))[:3],
+                transcript=f"{first.transcript} {second.transcript}".strip(),
+                hook_score=first.hook_score, hook_line=first.hook_line,
+                chat_intensity=max(prev.chat_intensity, current.chat_intensity),
+            )
+        else:
+            merged.append(current)
+    return merged
+
+
 _BATCH_SIZE = 4
 _HOOK_INSTRUCTION = (
     "Un clip vit ou meurt sur sa PREMIÈRE phrase : \"hook\" = à quel point cette "
@@ -393,11 +431,54 @@ def _normalise_rating(raw: dict, fallback_text: str) -> dict:
     }
 
 
+# Garde-fou contexte Ollama --------------------------------------------------
+# Sans num_ctx explicite, Ollama retombe sur le défaut du modèle (souvent
+# 2048-4096 tokens) et TRONQUE SILENCIEUSEMENT un prompt trop long — pas
+# d'erreur, juste une notation faite sur un texte incomplet. Un lot de 4
+# extraits de 6 min ≈ 3600-4000 mots de transcript avant même la consigne
+# système : largement de quoi dépasser ce défaut. On dimensionne num_ctx sur
+# le contenu réel envoyé (borné pour ne pas gaspiller de VRAM sur un extrait
+# court).
+_MIN_NUM_CTX = 2048
+_MAX_NUM_CTX = 16384
+
+
+def _estimate_tokens(text: str) -> int:
+    """Estimation grossière mais prudente (~3 caractères/token en FR/EN) :
+    sert à dimensionner num_ctx, pas un budget précis — mieux vaut
+    surestimer un peu que tronquer silencieusement."""
+    return max(1, len(text) // 3)
+
+
+def _context_size(*texts: str, headroom: int) -> int:
+    """Taille de contexte Ollama pour ces textes + la réponse JSON attendue
+    (`headroom`, en tokens), arrondie au Ko supérieur et bornée."""
+    needed = sum(_estimate_tokens(t) for t in texts) + headroom
+    return min(_MAX_NUM_CTX, max(_MIN_NUM_CTX, ((needed // 1024) + 1) * 1024))
+
+
+def _adaptive_batch_size(max_duration: float) -> int:
+    """Moins d'extraits par lot Ollama quand les clips sont longs : chaque lot
+    envoie la transcription COMPLÈTE de chaque extrait dans un seul prompt.
+    num_ctx (ci-dessus) empêche la troncature silencieuse, mais un lot plus
+    petit reste plus rapide à traiter et plus fiable qu'un contexte énorme."""
+    if max_duration <= 90:
+        return _BATCH_SIZE
+    if max_duration <= 180:
+        return 3
+    if max_duration <= 300:
+        return 2
+    return 1
+
+
 def _rate_batch_with_llm(texts: list[str], model: str, language: str | None = None) -> list[dict | None]:
     from src.llm import chat_json
 
+    system = _system_batch(language)
     body = "\n\n".join(f"[{index}] {text}" for index, text in enumerate(texts))
-    data = chat_json(_system_batch(language), body, model=model, timeout=180.0)
+    # ~200 tokens de réponse JSON par extrait (titre + résumé + raisons) + marge.
+    num_ctx = _context_size(system, body, headroom=200 * len(texts) + 300)
+    data = chat_json(system, body, model=model, timeout=180.0, num_ctx=num_ctx)
     items = data.get("clips") or data.get("results") or data.get("extraits") or []
     aligned: list[dict | None] = [None] * len(texts)
     for position, item in enumerate(items):
@@ -415,9 +496,10 @@ def _rate_batch_with_llm(texts: list[str], model: str, language: str | None = No
 def _rate_one_with_llm(text: str, model: str, language: str | None = None) -> dict:
     from src.llm import chat_json
 
-    data = chat_json(
-        _system_one(language), f'Transcription :\n"""\n{text}\n"""', model=model, timeout=60.0,
-    )
+    system = _system_one(language)
+    user = f'Transcription :\n"""\n{text}\n"""'
+    num_ctx = _context_size(system, user, headroom=300)
+    data = chat_json(system, user, model=model, timeout=60.0, num_ctx=num_ctx)
     return _normalise_rating(data, text)
 
 
@@ -510,9 +592,10 @@ def find_highlights(
         return []
 
     use_llm = model is not None
+    batch_size = _adaptive_batch_size(max_duration)
     highlights: list[Highlight] = []
-    for offset in range(0, len(finalists), _BATCH_SIZE):
-        chunk = finalists[offset : offset + _BATCH_SIZE]
+    for offset in range(0, len(finalists), batch_size):
+        chunk = finalists[offset : offset + batch_size]
         ratings: list[dict | None] = [None] * len(chunk)
         if use_llm:
             try:
@@ -557,9 +640,15 @@ def find_highlights(
                 )
             )
         report(
-            0.15 + 0.8 * min(offset + _BATCH_SIZE, len(finalists)) / len(finalists),
+            0.15 + 0.8 * min(offset + batch_size, len(finalists)) / len(finalists),
             "Notation des extraits…",
         )
+
+    # Deux extraits notés séparément peuvent être la suite quasi immédiate l'un
+    # de l'autre (_dedupe n'écarte que les chevauchements > 50 %) : sans ça
+    # l'utilisateur voit deux clips qui racontent la même histoire coupée en
+    # deux. Fusionnés tant que ça tient dans max_duration.
+    highlights = _merge_adjacent_highlights(highlights, max_duration=max_duration)
 
     # Classement par score viral uniquement : le hook n'est qu'une mise en avant.
     highlights.sort(key=lambda item: item.score, reverse=True)

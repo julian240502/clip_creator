@@ -4,14 +4,20 @@ import pytest
 
 from src import llm
 from src.highlights import (
+    _BATCH_SIZE,
     HOOK_STRONG,
+    Highlight,
+    _adaptive_batch_size,
     _candidate_windows,
+    _context_size,
     _dedupe,
     _hook_score,
     _looks_raw,
+    _merge_adjacent_highlights,
     _normalise_rating,
     _opening,
     _pre_score,
+    _rate_batch_with_llm,
     _rate_heuristic,
     _sentence_units,
     _short_label,
@@ -198,6 +204,86 @@ def test_dedupe_drops_heavily_overlapping_windows() -> None:
     ]
     kept = _dedupe(scored)
     assert {round(s) for s, _e, _t, _p in kept} == {0, 40}
+
+
+def _hl(start: float, end: float, score: int, **kw) -> Highlight:
+    return Highlight(
+        start=start, end=end, score=score,
+        title=kw.get("title", "Titre"), summary=kw.get("summary", "Résumé"),
+        reasons=kw.get("reasons", []), transcript=kw.get("transcript", ""),
+        hook_score=kw.get("hook_score", 0), hook_line=kw.get("hook_line", ""),
+        chat_intensity=kw.get("chat_intensity", 0.0),
+    )
+
+
+def test_merge_adjacent_highlights_joins_a_continuation() -> None:
+    a = _hl(0.0, 40.0, 60, title="A", transcript="première partie")
+    b = _hl(42.0, 90.0, 55, title="B", transcript="suite de l'histoire")
+    merged = _merge_adjacent_highlights([a, b], max_duration=120.0)
+    assert len(merged) == 1
+    assert (merged[0].start, merged[0].end) == (0.0, 90.0)
+    assert merged[0].score == 60
+    assert merged[0].title == "A"  # meilleur score garde le titre
+    assert "première partie" in merged[0].transcript
+    assert "suite de l'histoire" in merged[0].transcript
+
+
+def test_merge_adjacent_highlights_leaves_far_apart_clips_alone() -> None:
+    a = _hl(0.0, 30.0, 60)
+    b = _hl(200.0, 240.0, 70)
+    merged = _merge_adjacent_highlights([a, b], max_duration=120.0)
+    assert len(merged) == 2
+
+
+def test_merge_adjacent_highlights_respects_the_duration_cap() -> None:
+    a = _hl(0.0, 100.0, 60)
+    b = _hl(102.0, 200.0, 70)  # se touchent, mais l'union (200 s) dépasse max_duration
+    merged = _merge_adjacent_highlights([a, b], max_duration=120.0)
+    assert len(merged) == 2
+
+
+def test_merge_adjacent_highlights_hook_comes_from_the_earlier_clip() -> None:
+    # Le mieux noté est le second : le titre/résumé viennent de lui, mais le
+    # hook doit rester celui du DÉBUT du clip fusionné (ce qui ouvre vraiment).
+    a = _hl(0.0, 40.0, 50, hook_score=80, hook_line="Ouverture forte")
+    b = _hl(41.0, 80.0, 90, hook_score=10, hook_line="")
+    merged = _merge_adjacent_highlights([a, b], max_duration=120.0)
+    assert merged[0].hook_score == 80
+    assert merged[0].hook_line == "Ouverture forte"
+
+
+def test_adaptive_batch_size_shrinks_for_long_clips() -> None:
+    assert _adaptive_batch_size(60.0) == _BATCH_SIZE
+    assert _adaptive_batch_size(120.0) < _BATCH_SIZE
+    assert _adaptive_batch_size(180.0) < _adaptive_batch_size(60.0)
+    assert _adaptive_batch_size(360.0) <= 2
+
+
+def test_context_size_grows_with_content_and_stays_bounded() -> None:
+    short = _context_size("sys", "un texte court", headroom=300)
+    long_text = "mot " * 4000  # simule 4 extraits de 6 min dans un même lot
+    long = _context_size("sys", long_text, headroom=300)
+    assert short >= 2048
+    assert long > short
+    assert long <= 16384
+
+
+def test_rate_batch_with_llm_passes_a_sized_num_ctx(monkeypatch) -> None:
+    captured: dict = {}
+
+    def _fake_chat_json(system, user, *, model, timeout=120.0, num_ctx=None):
+        captured["num_ctx"] = num_ctx
+        return {"clips": []}
+
+    monkeypatch.setattr(llm, "chat_json", _fake_chat_json)
+    _rate_batch_with_llm(["texte court"], "qwen2.5:3b")
+    short_ctx = captured["num_ctx"]
+
+    _rate_batch_with_llm([("mot " * 900)] * 4, "qwen2.5:3b")
+    long_ctx = captured["num_ctx"]
+
+    assert short_ctx and short_ctx >= 2048
+    assert long_ctx > short_ctx
 
 
 def test_find_highlights_heuristic_only_is_sorted_and_bounded() -> None:

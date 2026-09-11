@@ -125,13 +125,24 @@ def chat_json(
     model: str,
     host: str = DEFAULT_HOST,
     timeout: float = 120.0,
+    num_ctx: int | None = None,
 ) -> dict:
-    """Un appel /api/chat en mode JSON. Lève une exception en cas d'échec."""
+    """Un appel /api/chat en mode JSON. Lève une exception en cas d'échec.
+
+    `num_ctx` (tokens) force la taille de contexte Ollama pour CET appel. Sans
+    ça, Ollama retombe sur le défaut du modèle (souvent 2048-4096 tokens) et
+    **tronque silencieusement** un prompt trop long — pas d'erreur, juste une
+    notation faite sur un texte incomplet. À fixer explicitement dès que le
+    texte envoyé (extraits longs, plusieurs par lot) peut dépasser ce défaut.
+    """
+    options: dict = {"temperature": 0.2}
+    if num_ctx:
+        options["num_ctx"] = num_ctx
     payload = {
         "model": model,
         "format": "json",
         "stream": False,
-        "options": {"temperature": 0.2},
+        "options": options,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
