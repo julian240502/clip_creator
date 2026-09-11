@@ -1151,7 +1151,7 @@ else:
     col_n, col_d = st.columns(2)
     target_count = col_n.slider("Nombre de clips visés", 3, 15, 8)
     dur_max = col_d.select_slider(
-        "Durée max d'un clip", options=list(range(20, 121, 5)), value=60, format_func=dur_label,
+        "Durée max d'un clip", options=list(range(20, 181, 5)), value=60, format_func=dur_label,
     )
     dur_min = max(12.0, round(dur_max * 0.4))
     st.caption(
