@@ -1089,6 +1089,18 @@ if st.session_state.get("clips"):
                         clip.unlink(missing_ok=True)
                         clip.with_suffix(".txt").unlink(missing_ok=True)
                     st.session_state.pop("_zip_cache", None)  # visait des fichiers supprimés
+
+                    all_sent = all(c.name in sent for c in clips)
+                    if all_sent and project_dir and Path(project_dir).is_dir():
+                        # Plus un seul clip du projet à garder localement : le reste
+                        # du dossier (.ass/.cmd, transcript, translation.txt…) ne
+                        # sert plus à rien -> on le supprime en bloc, pas juste les
+                        # .mp4/.txt un par un.
+                        freed += sum(
+                            f.stat().st_size for f in Path(project_dir).rglob("*") if f.is_file()
+                        )
+                        shutil.rmtree(project_dir, ignore_errors=True)
+
                     # On clique rarement sur « Nouvelle vidéo » — l'envoi vers le
                     # dossier EST en pratique le signal de fin de travail : on purge
                     # aussi le dossier de travail temporaire (vignettes d'analyse,
@@ -1097,10 +1109,18 @@ if st.session_state.get("clips"):
                     if work_dir.exists():
                         freed += sum(f.stat().st_size for f in work_dir.rglob("*") if f.is_file())
                         shutil.rmtree(work_dir, ignore_errors=True)
-                    st.success(
+
+                    message = (
                         f"{len(picked)} clip(s) copié(s) dans {export_dir} et supprimé(s) du "
                         f"cache local ({freed / 1_048_576:.0f} Mo libérés)."
                     )
+                    if all_sent:
+                        for key in (
+                            "clips", "clips_meta", "project_dir", "captions_skipped", "sent_clips",
+                        ):
+                            st.session_state.pop(key, None)
+                        message += " Tous les clips sont envoyés : dossier local du projet supprimé."
+                    st.success(message)
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001 - message affiché tel quel
                     st.error(f"Copie impossible : {exc}")

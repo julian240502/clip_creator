@@ -35,8 +35,10 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
   `<dossier>/<LANG>/<créateur>/<date lisible>/{clips,textes}/` — pointer vers un
   dossier Google Drive synchronisé permet de les récupérer sur le téléphone.
   Une fois copiés avec succès, le clip et son `.txt` sont **supprimés du cache
-  local** pour libérer de la place (le dossier envoyé devient la référence) —
-  l'envoi purge aussi le dossier de travail temporaire de l'analyse (vignettes,
+  local** pour libérer de la place (le dossier envoyé devient la référence) ;
+  une fois **tous** les clips du projet envoyés, le dossier local entier
+  (`.ass`/`.cmd`, transcript, `translation.txt`…) est supprimé en bloc. L'envoi
+  purge aussi le dossier de travail temporaire de l'analyse (vignettes,
   cache chat, aperçus), inutile une fois les clips prêts. Les sessions
   abandonnées (fermées sans rien envoyer) sont nettoyées au bout de 2 jours.
 
