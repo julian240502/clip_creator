@@ -176,7 +176,13 @@ def session_dir() -> Path:
 
 
 def _forget_send_selection() -> None:
-    for key in [k for k in st.session_state if k.startswith("send-clip-")]:
+    # send-clip-N/send-all/sent_clips : sélection d'envoi. vid-*/dl-* : aperçu
+    # affiché / octets préparés pour le téléchargement d'un clip — les clés sont
+    # réutilisées (clip-0, clip-1…) d'un projet à l'autre, donc à vider aussi :
+    # sinon un nouveau clip_000.mp4 hériterait du bouton "Télécharger" déjà
+    # préparé (et des octets !) de l'ancien clip au même index.
+    stale_prefixes = ("send-clip-", "vid-clip-", "vid-live-", "dl-clip-", "dl-live-")
+    for key in [k for k in st.session_state if k.startswith(stale_prefixes)]:
         st.session_state.pop(key, None)
     st.session_state.pop("send-all", None)
     st.session_state.pop("sent_clips", None)
@@ -464,15 +470,23 @@ def render_clip_card(
         with st.expander("Titre & hashtags"):
             st.code(sidecar.read_text(encoding="utf-8"), language=None)
 
-    if shown:
-        data = _read_bytes_resilient(clip)
-        if data is not None:
-            st.download_button(
-                "Télécharger", data, clip.name, "video/mp4",
-                key=key, use_container_width=True,
-            )
-    else:
-        st.caption("Ouvre l'aperçu pour lire et télécharger ce clip.")
+    # Lire le fichier entier pour le bouton "Télécharger" n'est plus lié à
+    # l'aperçu vidéo (eager) : la plupart des sessions n'utilisent que l'envoi
+    # vers le dossier (Drive…), jamais le téléchargement local — inutile de
+    # relire les octets de 3 gros clips à CHAQUE rerun (une case cochée
+    # ailleurs sur l'écran, par ex.) pour un bouton qui ne sert jamais.
+    dl_key = f"dl-{key}"
+    dl_data = st.session_state.get(dl_key)
+    if dl_data is None and st.button(
+        "Préparer le téléchargement", key=f"prep-{key}", use_container_width=True,
+    ):
+        dl_data = _read_bytes_resilient(clip)
+        st.session_state[dl_key] = dl_data
+    if dl_data is not None:
+        st.download_button(
+            "Télécharger", dl_data, clip.name, "video/mp4",
+            key=key, use_container_width=True,
+        )
 
 
 def _preview_source(source: dict, at: float, seconds: float = 4.0, max_height: int = 480) -> Path:
@@ -1536,6 +1550,10 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             on_clip=on_clip,
             progress=on_progress,
         )
+        # Un nouveau lot réutilise les mêmes clés (clip-0, clip-1…) que l'ancien —
+        # sans ça un vieux bouton "Télécharger" resterait prêt avec les octets de
+        # l'ancien clip au même index.
+        _forget_send_selection()
         st.session_state.project_dir = str(project_dir)
         st.session_state.clips = [str(clip) for clip in clips]
         st.session_state["clips_meta"] = clips_meta
