@@ -100,6 +100,28 @@ label p, [data-testid="stWidgetLabel"] p {color:#e2e3f0 !important}
 )
 
 WORK_ROOT = Path(tempfile.gettempdir()) / "clip-creator"
+
+
+def _sweep_stale_sessions(max_age_days: float = 2.0) -> None:
+    """Dossiers de travail temporaires (vignettes d'analyse, cache chat, aperçus)
+    laissés par des sessions jamais nettoyées — on clique rarement sur
+    « Nouvelle vidéo », et une session fermée sans avoir envoyé de clip ne
+    déclenche aucun nettoyage. Purge ce qui a plus de `max_age_days`."""
+    if not WORK_ROOT.is_dir():
+        return
+    cutoff = time.time() - max_age_days * 86400
+    for entry in WORK_ROOT.iterdir():
+        try:
+            if entry.is_dir() and entry.stat().st_mtime < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
+        except OSError:
+            pass
+
+
+if not st.session_state.get("_swept_stale_sessions"):
+    _sweep_stale_sessions()
+    st.session_state["_swept_stale_sessions"] = True
+
 # Pré-rempli dans « Copier les clips dans un dossier » — le dossier Google Drive
 # synchronisé de l'owner. Modifiable dans l'UI, mémorisé pour la session.
 DEFAULT_EXPORT_DIR = r"G:\Mon Drive\CLIPS"
@@ -1067,6 +1089,14 @@ if st.session_state.get("clips"):
                         clip.unlink(missing_ok=True)
                         clip.with_suffix(".txt").unlink(missing_ok=True)
                     st.session_state.pop("_zip_cache", None)  # visait des fichiers supprimés
+                    # On clique rarement sur « Nouvelle vidéo » — l'envoi vers le
+                    # dossier EST en pratique le signal de fin de travail : on purge
+                    # aussi le dossier de travail temporaire (vignettes d'analyse,
+                    # cache chat, aperçus), qui ne sert plus une fois les clips prêts.
+                    work_dir = session_dir()
+                    if work_dir.exists():
+                        freed += sum(f.stat().st_size for f in work_dir.rglob("*") if f.is_file())
+                        shutil.rmtree(work_dir, ignore_errors=True)
                     st.success(
                         f"{len(picked)} clip(s) copié(s) dans {export_dir} et supprimé(s) du "
                         f"cache local ({freed / 1_048_576:.0f} Mo libérés)."
