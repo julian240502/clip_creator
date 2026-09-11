@@ -394,12 +394,25 @@ _EAGER_CLIPS = 3
 
 def render_clip_card(
     clip: Path, key: str, *, selectable: bool = False, meta: dict | None = None,
-    eager: bool = True,
+    eager: bool = True, interactive: bool = True,
 ) -> None:
     st.markdown(f"**{clip.name}**")
     badges = _meta_badges_html(meta)
     if badges:
         st.markdown(badges, unsafe_allow_html=True)
+
+    if not interactive:
+        # Grille en direct pendant la génération : process_video() tourne encore,
+        # de façon synchrone, dans CE run Streamlit. Le moindre widget cliqué ici
+        # (bouton, case, téléchargement) déclenche un rerun qui INTERROMPT la
+        # génération en cours — le clip en vaut, la suite n'est jamais produite,
+        # et on retombe sur l'écran d'avant sans que rien ne le signale. Donc :
+        # aucun widget dans la grille en direct, juste un aperçu passif.
+        if eager:
+            st.video(str(clip))
+        else:
+            st.caption("Aperçu après la génération.")
+        return
 
     vid_key = f"vid-{key}"
     shown = eager or st.session_state.get(vid_key, False)
@@ -1410,7 +1423,7 @@ if st.button(gen_label, use_container_width=True, disabled=gen_disabled):
             render_clip_card(
                 Path(path), key=f"live-{n}",
                 meta=clips_meta[n] if n < len(clips_meta) else None,
-                eager=n < _EAGER_CLIPS,
+                eager=n < _EAGER_CLIPS, interactive=False,
             )
         counter["n"] += 1
 
