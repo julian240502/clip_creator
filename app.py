@@ -414,6 +414,15 @@ def render_clip_card(
             st.caption("Aperçu après la génération.")
         return
 
+    sent = clip.name in st.session_state.get("sent_clips", set())
+    if sent and not clip.exists():
+        # Envoyé vers le dossier (Drive…) puis supprimé du cache local pour
+        # libérer de la place — plus rien à lire ni à télécharger ici.
+        st.caption("✓ Envoyé vers le dossier — supprimé du cache local.")
+        if selectable:
+            st.checkbox("Envoyer vers le dossier · ✓ déjà copié", key=f"send-{key}", disabled=True)
+        return
+
     vid_key = f"vid-{key}"
     shown = eager or st.session_state.get(vid_key, False)
     if shown:
@@ -423,7 +432,6 @@ def render_clip_card(
         st.rerun()
 
     if selectable:
-        sent = clip.name in st.session_state.get("sent_clips", set())
         st.checkbox(
             "Envoyer vers le dossier" + (" · ✓ déjà copié" if sent else ""),
             key=f"send-{key}",
@@ -974,6 +982,8 @@ if st.session_state.get("clips"):
                 try:
                     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED) as archive:
                         for clip in clips:
+                            if not clip.exists():
+                                continue  # déjà envoyé vers le dossier puis supprimé du cache
                             archive.write(clip, clip.name)
                             sidecar = clip.with_suffix(".txt")
                             if sidecar.is_file():
@@ -1043,7 +1053,21 @@ if st.session_state.get("clips"):
                     )
                     sent = st.session_state.setdefault("sent_clips", set())
                     sent.update(clips[i].name for i in picked)
-                    st.success(f"{len(picked)} clip(s) copié(s) dans {export_dir}.")
+                    # La copie envoyée (Drive…) devient la référence : on libère
+                    # l'espace local en supprimant le clip + son .txt une fois
+                    # copiés avec succès.
+                    freed = 0
+                    for i in picked:
+                        clip = clips[i]
+                        freed += clip.stat().st_size if clip.exists() else 0
+                        clip.unlink(missing_ok=True)
+                        clip.with_suffix(".txt").unlink(missing_ok=True)
+                    st.session_state.pop("_zip_cache", None)  # visait des fichiers supprimés
+                    st.success(
+                        f"{len(picked)} clip(s) copié(s) dans {export_dir} et supprimé(s) du "
+                        f"cache local ({freed / 1_048_576:.0f} Mo libérés)."
+                    )
+                    st.rerun()
                 except Exception as exc:  # noqa: BLE001 - message affiché tel quel
                     st.error(f"Copie impossible : {exc}")
     else:

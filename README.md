@@ -34,6 +34,8 @@ Le flux se fait en deux temps : on **charge et prévisualise** la vidéo (lecteu
 - après génération, **choix des clips** à envoyer vers un dossier au choix, rangés
   `<dossier>/<LANG>/<créateur>/<date lisible>/{clips,textes}/` — pointer vers un
   dossier Google Drive synchronisé permet de les récupérer sur le téléphone.
+  Une fois copiés avec succès, le clip et son `.txt` sont **supprimés du cache
+  local** pour libérer de la place (le dossier envoyé devient la référence).
 
 ## Recadrage sur le visage (optionnel)
 
