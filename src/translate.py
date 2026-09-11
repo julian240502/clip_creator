@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -172,9 +173,11 @@ def _padded(result: list[str] | None, n: int) -> list[str]:
 
 def _translate_segments(
     texts: list[str], durations: list[float], target: str, model: str,
+    *, progress: Callable[[int, int], None] | None = None,
 ) -> list[str]:
     system = _system_prompt(_LANG_NAMES[target])
     out = list(texts)
+    total = len(texts)
     for start in range(0, len(texts), _BATCH):
         ct, cd = texts[start : start + _BATCH], durations[start : start + _BATCH]
         context = texts[start - 1] if start > 0 else ""
@@ -191,6 +194,10 @@ def _translate_segments(
         for i in range(len(ct)):
             if i < len(translated) and str(translated[i]).strip():
                 out[start + i] = str(translated[i]).strip()
+        if progress:
+            # Sans ça, un long lot (des dizaines de phrases, gros modèle) tourne
+            # de longues minutes sur un seul message statique -> ça a l'air figé.
+            progress(min(start + len(ct), total), total)
 
     # Passe finale : les items encore identiques à la source sont retentés **un
     # par un** (une requête à un seul élément ne "perd" quasi jamais). Sautée si
@@ -233,6 +240,7 @@ def translate_transcript(
     cache: bool = True,
     windows: list[tuple[float, float]] | None = None,
     debug_out: Path | str | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> Transcript:
     """Transcript où chaque **unité ~phrase** utile est traduite en `target`.
 
@@ -240,6 +248,11 @@ def translate_transcript(
     exporté (perf). Chaque phrase traduite est portée sur sa fenêtre temporelle
     réelle `[premier mot, dernier mot]`. Transcript renvoyé sans mots -> affichage
     en bloc par unité (`src/captions.py::build_ass`).
+
+    `progress(fait, total)` (en unités ~phrases) est appelé après chaque lot —
+    la traduction avec le gros modèle peut prendre plusieurs minutes sur une
+    heure de contenu ; sans retour intermédiaire, ça n'a aucun moyen de se
+    distinguer d'un blocage.
 
     Inchangé si la cible est déjà la langue parlée, si la langue n'est pas gérée,
     ou si aucun modèle Ollama n'est disponible.
@@ -287,7 +300,7 @@ def translate_transcript(
     if translations is None:
         if not model:
             return transcript
-        translations = _translate_segments(originals, durations, target, model)
+        translations = _translate_segments(originals, durations, target, model, progress=progress)
         if cache:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(json.dumps(translations, ensure_ascii=False), encoding="utf-8")

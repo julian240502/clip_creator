@@ -137,6 +137,13 @@ def _generate_from_clip_windows(
                 transcript = translate_transcript(
                     transcript, target, model, windows=windows,
                     debug_out=project_dir / f"translation.{target}.txt",
+                    # Peut prendre plusieurs minutes sur une longue sélection —
+                    # sans ce retour par lot, la barre reste plantée sur un seul
+                    # message et ça a l'air figé.
+                    progress=lambda done, total: report(
+                        0.15 + 0.1 * (done / max(total, 1)),
+                        f"Traduction des sous-titres → {target}… {done}/{total} phrases",
+                    ),
                 )
                 lang_font = font_for_language(target)
                 if lang_font:
@@ -361,6 +368,10 @@ def process_video(
                     transcript = translate_transcript(
                         transcript, target, model, windows=needed,
                         debug_out=project_dir / f"translation.{target}.txt",
+                        progress=lambda done, total: report(
+                            0.24 + 0.1 * (done / max(total, 1)),
+                            f"Traduction des sous-titres → {target}… {done}/{total} phrases",
+                        ),
                     )
                     lang_font = font_for_language(target)
                     if lang_font:

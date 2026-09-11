@@ -48,6 +48,26 @@ def test_translate_transcript_replaces_text_as_a_block_per_sentence(monkeypatch,
     assert calls == []
 
 
+def test_translate_transcript_reports_progress_per_batch(monkeypatch, tmp_path) -> None:
+    """Un gros lot (gros modèle, longue sélection) peut prendre plusieurs
+    minutes : sans retour intermédiaire, ça n'a aucun moyen de ne pas
+    ressembler à un blocage."""
+    monkeypatch.setattr("src.translate.TRANSCRIPTIONS_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr("src.translate._BATCH", 1, raising=False)  # 1 lot par unité
+
+    def fake_chat_json(system, user, **_kw):
+        return {"t": ["Bonjour à tous."] if "Hello" in user else ["Ceci est un test."]}
+
+    monkeypatch.setattr(llm, "chat_json", fake_chat_json)
+
+    calls: list[tuple[int, int]] = []
+    translate_transcript(
+        _en_transcript(), "fr", model="llama3",
+        progress=lambda done, total: calls.append((done, total)),
+    )
+    assert calls == [(1, 2), (2, 2)]
+
+
 def test_translate_transcript_splits_a_segment_by_real_word_timing(monkeypatch, tmp_path) -> None:
     """Un segment Whisper qui couvre plusieurs phrases est redécoupé en unités
     ~phrases, chacune portée sur sa fenêtre `[premier mot, dernier mot]` réelle —

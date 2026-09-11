@@ -990,44 +990,49 @@ if st.session_state.get("clips"):
 
     project_dir = st.session_state.get("project_dir")
     if project_dir:
-        # L'archive était reconstruite (lecture de tous les clips) à CHAQUE rerun —
-        # une case cochée bloquait alors le serveur média et les <video> ne
-        # chargeaient plus. On ne (re)construit que si la liste des clips change.
-        # Gardée UNIQUEMENT en mémoire (pas écrite dans project_dir) : un fichier
-        # .zip sur disque doublait bêtement l'espace utilisé par le projet pour
-        # un archive qui ne sert qu'au bouton "Télécharger tout" ci-dessous.
+        # Construction PARESSEUSE, au clic : lire tous les clips en mémoire pour
+        # le zip bloquait le rendu de "Clips prêts" juste après la génération —
+        # avec une quinzaine de clips de plusieurs minutes, ça pouvait tourner
+        # à plusieurs minutes d'écran gris avant que quoi que ce soit d'autre ne
+        # s'affiche. Gardée UNIQUEMENT en mémoire (pas écrite dans project_dir),
+        # mise en cache par signature (pas reconstruite si les clips n'ont pas
+        # changé, ex. une case cochée ailleurs sur l'écran).
         _sig = tuple(
             (c.name, c.stat().st_size if c.exists() else 0) for c in clips
         )
         _cache = st.session_state.get("_zip_cache") or {}
-        if _cache.get("sig") != _sig:
-            zip_data: bytes | None = None
-            last_exc: OSError | None = None
-            for _ in range(3):
-                try:
-                    buffer = io.BytesIO()
-                    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
-                        for clip in clips:
-                            if not clip.exists():
-                                continue  # déjà envoyé vers le dossier puis supprimé du cache
-                            archive.write(clip, clip.name)
-                            sidecar = clip.with_suffix(".txt")
-                            if sidecar.is_file():
-                                archive.write(sidecar, sidecar.name)
-                    zip_data = buffer.getvalue()
-                    break
-                except OSError as exc:
-                    last_exc = exc
-                    time.sleep(0.5)
-            _cache = {"sig": _sig, "data": zip_data, "exc": last_exc}
-            st.session_state["_zip_cache"] = _cache
-        zip_data, last_exc = _cache["data"], _cache["exc"]
+        zip_data: bytes | None = _cache.get("data") if _cache.get("sig") == _sig else None
+        last_exc: OSError | None = _cache.get("exc") if _cache.get("sig") == _sig else None
+
+        if zip_data is None and st.button(
+            "Préparer l'archive de tous les clips (.zip)", use_container_width=True,
+        ):
+            with st.spinner("Compression des clips…"):
+                for _ in range(3):
+                    try:
+                        buffer = io.BytesIO()
+                        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
+                            for clip in clips:
+                                if not clip.exists():
+                                    continue  # déjà envoyé vers le dossier puis supprimé du cache
+                                archive.write(clip, clip.name)
+                                sidecar = clip.with_suffix(".txt")
+                                if sidecar.is_file():
+                                    archive.write(sidecar, sidecar.name)
+                        zip_data = buffer.getvalue()
+                        last_exc = None
+                        break
+                    except OSError as exc:
+                        last_exc = exc
+                        time.sleep(0.5)
+            st.session_state["_zip_cache"] = {"sig": _sig, "data": zip_data, "exc": last_exc}
+
         if zip_data is not None:
             st.download_button(
                 "Télécharger tous les clips (.zip)", zip_data, "clips.zip",
                 "application/zip", use_container_width=True,
             )
-        else:
+        elif last_exc is not None:
             st.warning(
                 "Impossible de préparer l'archive ZIP — le dossier est probablement "
                 f"synchronisé (OneDrive, Google Drive…) et verrouille un fichier. "
