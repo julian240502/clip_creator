@@ -189,6 +189,12 @@ que les fragments de cette fenêtre puis seule elle est transcrite. Les horodata
 affichés restent dans le temps absolu de la source ; l'extrait téléchargé est mis
 en cache par URL + qualité + fenêtre.
 
+**VOD Twitch avec musique sous droits (« muted »).** Sur ces rediffs, la copie de
+flux ne peut sauter qu'au tout début (`0`) du flux distant — jamais à un instant
+non nul, quel qu'il soit. Détecté automatiquement : repli sur un téléchargement
+depuis `0` puis une découpe locale (plus lent si la portion visée est loin dans
+une longue rediff, mais fonctionne là où l'accès direct échoue net).
+
 Sur un VOD où la voix se mêle au son du jeu / aux alertes, la transcription peut
 dériver, décaler ou sauter des passages. Les réglages par défaut sont calibrés
 pour ça :

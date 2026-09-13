@@ -115,7 +115,7 @@ def test_download_source_range_downloads_only_the_window(monkeypatch, tmp_path: 
 
         def extract_info(self, url, download=True):
             out = Path(captured["options"]["outtmpl"].replace("%(id)s.%(ext)s", "v1.mp4"))
-            out.write_bytes(b"data" * 80)
+            out.write_bytes(b"data" * 30_000)  # au-dessus du seuil anti-flux-vide (100 Ko)
             return {"id": "v1"}
 
     monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
@@ -131,6 +131,137 @@ def test_download_source_range_downloads_only_the_window(monkeypatch, tmp_path: 
     # fenêtre différente -> autre bucket
     download_source_range("https://host.test/v/1", tmp_path, 0.0, 60.0, max_height=720)
     assert captured["options"]["download_ranges"](None, None)[0]["end_time"] == 60.0
+
+
+def test_download_source_range_retries_with_a_smaller_window_on_a_near_empty_result(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """La fin demandée déborde la fin réelle du flux (VOD tronqué en bout de
+    rediff) : le 1er essai ne renvoie presque rien -> on recule la fin et on
+    retente plutôt que de renvoyer un fichier inexploitable."""
+    from src.downloader import download_source_range
+
+    calls: list[dict] = []
+
+    class FakeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            calls.append(self.options["download_ranges"](None, None)[0])
+            out = Path(self.options["outtmpl"].replace("%(id)s.%(ext)s", "v1.mp4"))
+            out.write_bytes(b"x" * (10 if len(calls) == 1 else 150_000))
+            return {"id": "v1"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    media = download_source_range("https://host.test/v/2", tmp_path, 100.0, 200.0, max_height=480)
+    assert Path(media).stat().st_size >= 100_000
+    assert len(calls) == 2
+    assert calls[0]["end_time"] == 200.0
+    assert calls[1]["end_time"] == pytest.approx(192.0)  # -8 s, 2e essai
+
+
+def test_download_source_range_raises_a_clear_error_when_the_stream_stays_truncated(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    from src.downloader import download_source_range
+
+    class FakeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            out = Path(self.options["outtmpl"].replace("%(id)s.%(ext)s", "v1.mp4"))
+            out.write_bytes(b"x" * 10)  # toujours quasi vide, quel que soit l'essai
+            return {"id": "v1"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    with pytest.raises(RuntimeError, match="dépasse probablement"):
+        download_source_range("https://host.test/v/3", tmp_path, 100.0, 130.0, max_height=480)
+
+
+def test_download_source_range_falls_back_to_start_zero_on_a_muted_vod(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Playlist Twitch « muted » (musique sous droits) : ffmpeg ne peut sauter
+    qu'à start=0 dans le flux distant, jamais à un instant non nul — quel que
+    soit cet instant. Repli : télécharger [0, end] puis découper localement."""
+    from src.downloader import download_source_range
+
+    class FakeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            rng = self.options["download_ranges"](None, None)[0]
+            out = Path(self.options["outtmpl"].replace("%(id)s.%(ext)s", "v1.mp4"))
+            out.write_bytes(b"x" * (200_000 if rng["start_time"] == 0.0 else 10))
+            return {"id": "v1"}
+
+    class FakeResult:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, capture_output=True, text=True):
+        Path(cmd[-1]).write_bytes(b"x" * 150_000)  # simule la découpe locale ffmpeg
+        return FakeResult()
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    media = download_source_range("https://host.test/v/5", tmp_path, 500.0, 560.0, max_height=480)
+    assert Path(media).stat().st_size >= 100_000
+
+
+def test_download_source_range_ignores_a_stale_near_empty_cached_file(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Un essai précédent raté avait laissé un fichier quasi vide en cache :
+    il ne doit pas être renvoyé tel quel, ni bloquer un nouveau téléchargement."""
+    from src.downloader import download_source_range
+
+    url = "https://host.test/v/4"
+    key = downloader.hashlib.sha1(f"{url}|480|100.0|200.0".encode()).hexdigest()[:16]
+    bucket = tmp_path / f"range_{key}"
+    bucket.mkdir(parents=True)
+    (bucket / "v1.mp4").write_bytes(b"x" * 10)
+
+    class FakeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            out = Path(self.options["outtmpl"].replace("%(id)s.%(ext)s", "v1.mp4"))
+            out.write_bytes(b"x" * 150_000)
+            return {"id": "v1"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    media = download_source_range(url, tmp_path, 100.0, 200.0, max_height=480)
+    assert Path(media).stat().st_size >= 100_000
 
 
 def test_process_video_ranged_download_rebases_clip_windows(
