@@ -176,6 +176,7 @@ def test_download_source_range_fetches_only_the_needed_hls_segments(
     monkeypatch.setattr(downloader, "YoutubeDL", FakeProbeYDL)
     monkeypatch.setattr(downloader, "_fetch_text", fake_fetch_text)
     monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr("src.video_splitter.get_video_duration", lambda path: 100.0)
 
     # Fenêtre loin dans une "rediff" de 500 s (50 segments x 10 s) : 300-306 s.
     media = download_source_range(
@@ -237,6 +238,7 @@ def test_download_source_range_trims_hls_segments_to_the_exact_window(
     monkeypatch.setattr(downloader, "YoutubeDL", FakeProbeYDL)
     monkeypatch.setattr(downloader, "_fetch_text", lambda url, timeout=20.0: playlist_text)
     monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr("src.video_splitter.get_video_duration", lambda path: 100.0)
 
     # start=304 -> 1er segment choisi [290,300) (pad=12 -> lo=292) : first_start=290.
     download_source_range("https://www.twitch.tv/videos/1", tmp_path, 304.0, 308.0, max_height=480)
@@ -287,6 +289,7 @@ def test_download_clip_uses_segments_then_trims_to_the_exact_window(
     monkeypatch.setattr(downloader, "YoutubeDL", FakeProbeYDL)
     monkeypatch.setattr(downloader, "_fetch_text", lambda url, timeout=20.0: playlist_text)
     monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr("src.video_splitter.get_video_duration", lambda path: 100.0)
 
     # start=304 -> 1er segment choisi est [290,300) (pad=12 -> lo=292) : first_start=290.
     media = download_clip("https://www.twitch.tv/videos/1", tmp_path, 304.0, 308.0, max_height=480)
@@ -322,6 +325,7 @@ def test_download_source_range_downloads_only_the_window(monkeypatch, tmp_path: 
             return {"id": "v1"}
 
     monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    monkeypatch.setattr("src.video_splitter.get_video_duration", lambda path: 100.0)
     a = download_source_range("https://host.test/v/1", tmp_path, 12780.0, 14220.0, max_height=720)
     ranges = captured["options"]["download_ranges"](None, None)
     assert ranges == [{"start_time": 12780.0, "end_time": 14220.0}]
@@ -363,6 +367,7 @@ def test_download_source_range_retries_with_a_smaller_window_on_a_near_empty_res
             return {"id": "v1"}
 
     monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    monkeypatch.setattr("src.video_splitter.get_video_duration", lambda path: 100.0)
     media = download_source_range("https://host.test/v/2", tmp_path, 100.0, 200.0, max_height=480)
     assert Path(media).stat().st_size >= 100_000
     assert len(calls) == 2
@@ -429,6 +434,7 @@ def test_download_source_range_falls_back_to_start_zero_on_a_muted_vod(
 
     monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
     monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    monkeypatch.setattr("src.video_splitter.get_video_duration", lambda path: 100.0)
 
     media = download_source_range("https://host.test/v/5", tmp_path, 500.0, 560.0, max_height=480)
     assert Path(media).stat().st_size >= 100_000
@@ -463,8 +469,98 @@ def test_download_source_range_ignores_a_stale_near_empty_cached_file(
             return {"id": "v1"}
 
     monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    monkeypatch.setattr("src.video_splitter.get_video_duration", lambda path: 100.0)
     media = download_source_range(url, tmp_path, 100.0, 200.0, max_height=480)
     assert Path(media).stat().st_size >= 100_000
+
+
+def test_is_valid_media_rejects_a_large_but_corrupt_file(tmp_path: Path) -> None:
+    """Reported crash: "moov atom not found" on a file that had passed a
+    size-only check. A truncated/corrupt file can easily clear the byte
+    threshold while still being unreadable — the structural check must catch
+    that, not just the size."""
+    from src.downloader import _is_valid_media
+
+    corrupt = tmp_path / "corrupt.mp4"
+    corrupt.write_bytes(b"x" * 150_000)  # bien au-dessus du seuil de taille
+    assert not _is_valid_media(corrupt)
+
+
+def test_fetch_range_via_segments_defers_to_direct_seek_for_a_large_plain_manifest(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Sans #EXT-X-MAP (segments .ts classiques, pas de bug de seek à
+    contourner), une fenêtre qui demanderait trop de segments doit laisser la
+    main au téléchargement direct (plus rapide, pas de risque de timeout)
+    plutôt que de tout concaténer nous-mêmes."""
+    from src.downloader import _fetch_range_via_segments
+
+    # Playlist sans #EXT-X-MAP, fenêtre qui couvre plus de segments que la limite.
+    n = 100
+    playlist_text = "#EXTM3U\n" + "".join(f"#EXTINF:10.000,\n{i}.ts\n" for i in range(n)) + "#EXT-X-ENDLIST\n"
+
+    class FakeProbeYDL:
+        def __init__(self, options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            return {"formats": [{"url": "https://cdn.test/vod/index.m3u8", "height": 480}]}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeProbeYDL)
+    monkeypatch.setattr(downloader, "_fetch_text", lambda url, timeout=20.0: playlist_text)
+
+    def boom(*_a, **_k):
+        raise AssertionError("ne doit pas tenter de concaténer sans #EXT-X-MAP sur une grosse fenêtre")
+
+    monkeypatch.setattr(downloader.subprocess, "run", boom)
+
+    result = _fetch_range_via_segments(
+        "https://www.twitch.tv/videos/1", tmp_path, 0.0, float(n * 10), 480,
+    )
+    assert result is None
+
+
+def test_fetch_range_via_segments_cleans_up_the_output_on_timeout(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Un process tué par le timeout laisse un fichier tronqué — il ne doit
+    jamais rester en cache pour tromper un appel suivant."""
+    import subprocess as real_subprocess
+
+    from src.downloader import _fetch_range_via_segments
+
+    playlist_text = "#EXTM3U\n#EXTINF:10.000,\n0.ts\n#EXT-X-ENDLIST\n"
+
+    class FakeProbeYDL:
+        def __init__(self, options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            return {"formats": [{"url": "https://cdn.test/vod/index.m3u8", "height": 480}]}
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=None):
+        Path(cmd[-1]).write_bytes(b"x" * 150_000)  # écriture partielle avant d'être "tué"
+        raise real_subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeProbeYDL)
+    monkeypatch.setattr(downloader, "_fetch_text", lambda url, timeout=20.0: playlist_text)
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    with pytest.raises(real_subprocess.TimeoutExpired):
+        _fetch_range_via_segments("https://www.twitch.tv/videos/1", tmp_path, 0.0, 10.0, 480)
+    assert list(tmp_path.glob("*.mp4")) == []  # rien laissé derrière
 
 
 def test_process_video_ranged_download_rebases_clip_windows(

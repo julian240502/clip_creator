@@ -149,9 +149,22 @@ _END_PULLBACK_ATTEMPTS = 4
 
 
 def _is_valid_media(path: Path) -> bool:
+    """Taille plausible **et** conteneur lisible. Un fichier tronqué (process
+    tué par un timeout en plein écriture, par ex.) peut largement dépasser le
+    seuil de taille tout en étant structurellement invalide (`moov atom not
+    found`) — un contrôle sur la seule taille le laisserait passer pour
+    « valide », y compris en cache, et ferait planter tout ce qui l'utilise
+    ensuite (`get_video_duration`…) bien plus tard et sans lien apparent."""
     try:
-        return path.is_file() and path.stat().st_size >= _MIN_VALID_BYTES
+        if not path.is_file() or path.stat().st_size < _MIN_VALID_BYTES:
+            return False
     except OSError:
+        return False
+    from src.video_splitter import get_video_duration
+
+    try:
+        return get_video_duration(path) > 0
+    except Exception:  # noqa: BLE001 - conteneur illisible -> pas valide
         return False
 
 
@@ -226,6 +239,12 @@ def _fetch_range_via_ffmpeg(
 _EXTINF_RE = re.compile(r"#EXTINF:([0-9.]+)")
 _MAP_RE = re.compile(r'#EXT-X-MAP:URI="([^"]+)"')
 _SEGMENT_START_PAD = 12.0  # marge avant `start` : ~1 segment Twitch (10 s) de sécurité
+# Sans #EXT-X-MAP (segments .ts classiques), le seek direct (download_ranges)
+# marche nativement et est plus rapide qu'assembler nous-mêmes des dizaines de
+# segments — au-delà de cette taille de fenêtre, autant lui laisser la main
+# plutôt que risquer le timeout de la concaténation pour rien.
+_MAX_SEGMENTS_WITHOUT_MAP = 60  # ~10 min à 10 s/segment
+_SEGMENT_FETCH_TIMEOUT = 600.0  # généreux : seul recours qui marche sur un manifeste fMP4
 
 
 def _fetch_text(url: str, timeout: float = 20.0) -> str:
@@ -308,6 +327,8 @@ def _fetch_range_via_segments(
     chosen, first_start = _select_segments(segments, start, end, _SEGMENT_START_PAD)
     if not chosen:
         return None
+    if map_uri is None and len(chosen) > _MAX_SEGMENTS_WITHOUT_MAP:
+        return None  # pas de bug de seek à contourner ici -> autant laisser la main au direct
 
     lines = ["#EXTM3U", "#EXT-X-VERSION:7", f"#EXT-X-TARGETDURATION:{int(max(d for d, _ in chosen)) + 1}"]
     if map_uri:
@@ -320,16 +341,25 @@ def _fetch_range_via_segments(
     local_playlist.write_text("\n".join(lines), encoding="utf-8")
     output = bucket / output_name
     try:
-        result = subprocess.run(
-            [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                # Nécessaire pour qu'une playlist LOCALE puisse pointer vers des
-                # segments distants (http/https) : ffmpeg les refuse sinon.
-                "-protocol_whitelist", "file,http,https,tcp,tls,crypto,data",
-                "-i", str(local_playlist), "-c", "copy", str(output),
-            ],
-            capture_output=True, text=True, timeout=180,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    # Nécessaire pour qu'une playlist LOCALE puisse pointer vers des
+                    # segments distants (http/https) : ffmpeg les refuse sinon.
+                    "-protocol_whitelist", "file,http,https,tcp,tls,crypto,data",
+                    "-i", str(local_playlist), "-c", "copy", str(output),
+                ],
+                capture_output=True, text=True, timeout=_SEGMENT_FETCH_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            # Le process tué en plein écriture laisse un fichier tronqué (taille
+            # plausible, conteneur invalide) — sans ce nettoyage, un appel
+            # suivant sur la même fenêtre le prendrait pour un résultat en
+            # cache valide (`_is_valid_media` avant son propre durcissement ne
+            # regardait que la taille) et plantait plus tard, loin de la cause.
+            output.unlink(missing_ok=True)
+            raise
     finally:
         local_playlist.unlink(missing_ok=True)
     if result.returncode != 0 or not _is_valid_media(output):
