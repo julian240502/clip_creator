@@ -96,6 +96,105 @@ def test_download_video_outtmpl_avoids_the_title(monkeypatch, tmp_path: Path) ->
     assert captured["options"]["restrictfilenames"] is True
 
 
+def test_parse_hls_segments_extracts_init_and_segment_list() -> None:
+    from src.downloader import _parse_hls_segments
+
+    text = (
+        "#EXTM3U\n"
+        '#EXT-X-MAP:URI="init-0.mp4"\n'
+        "#EXTINF:10.000,\n"
+        "0-muted.mp4\n"
+        "#EXTINF:10.000,\n"
+        "1-muted.mp4\n"
+        "#EXT-X-ENDLIST\n"
+    )
+    map_uri, segments = _parse_hls_segments(text, "https://cdn.test/path/")
+    assert map_uri == "https://cdn.test/path/init-0.mp4"
+    assert segments == [
+        (10.0, "https://cdn.test/path/0-muted.mp4"),
+        (10.0, "https://cdn.test/path/1-muted.mp4"),
+    ]
+
+
+def test_select_segments_pads_only_the_start_not_the_end() -> None:
+    from src.downloader import _select_segments
+
+    segments = [(10.0, f"seg{i}.mp4") for i in range(10)]  # couvre 0-100 s, 10 s/segment
+    chosen = _select_segments(segments, start=70.0, end=76.0, pad=12.0)
+    # start - pad = 58 -> segment [50,60) ; end = 76 -> segment [70,80), pas plus loin.
+    assert [uri for _dur, uri in chosen] == ["seg5.mp4", "seg6.mp4", "seg7.mp4"]
+
+
+def test_download_source_range_fetches_only_the_needed_hls_segments(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Manifeste fMP4 réaliste (#EXT-X-MAP) : seuls les quelques segments qui
+    couvrent la fenêtre sont demandés, jamais le reste de la rediff — même
+    quand la fenêtre est loin dedans."""
+    from src.downloader import download_source_range
+
+    playlist_text = (
+        "#EXTM3U\n"
+        '#EXT-X-MAP:URI="init-0.mp4"\n'
+        + "".join(f"#EXTINF:10.000,\n{i}.mp4\n" for i in range(50))
+        + "#EXT-X-ENDLIST\n"
+    )
+
+    class FakeProbeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            assert download is False  # sonde de métadonnées seulement
+            return {"formats": [{"url": "https://cdn.test/vod/index-muted-X.m3u8", "height": 480}]}
+
+    fetched_urls: list[str] = []
+
+    def fake_fetch_text(url, timeout=20.0):
+        fetched_urls.append(url)
+        return playlist_text
+
+    written_playlists: list[str] = []
+
+    class FakeResult:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=None):
+        local_playlist = Path(cmd[cmd.index("-i") + 1])
+        written_playlists.append(local_playlist.read_text(encoding="utf-8"))
+        Path(cmd[-1]).write_bytes(b"x" * 150_000)
+        return FakeResult()
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeProbeYDL)
+    monkeypatch.setattr(downloader, "_fetch_text", fake_fetch_text)
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    # Fenêtre loin dans une "rediff" de 500 s (50 segments x 10 s) : 300-306 s.
+    media = download_source_range(
+        "https://www.twitch.tv/videos/1", tmp_path, 300.0, 306.0, max_height=480,
+    )
+    assert Path(media).stat().st_size >= 100_000
+    assert len(fetched_urls) == 1  # 1 seule lecture de la playlist distante
+
+    listed = [
+        line for line in written_playlists[0].splitlines()
+        if line.startswith("https://cdn.test/vod/") and line.endswith(".mp4")
+    ]
+    assert listed == [
+        "https://cdn.test/vod/28.mp4",
+        "https://cdn.test/vod/29.mp4",
+        "https://cdn.test/vod/30.mp4",
+    ]  # pas les 50 segments de la rediff
+    assert '#EXT-X-MAP:URI="https://cdn.test/vod/init-0.mp4"' in written_playlists[0]
+
+
 def test_download_source_range_downloads_only_the_window(monkeypatch, tmp_path: Path) -> None:
     """Fenêtre analysée d'une rediff de 5 h : yt-dlp reçoit un download_ranges, et
     le résultat est mis en cache par URL + qualité + fenêtre."""

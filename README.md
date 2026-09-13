@@ -189,11 +189,12 @@ que les fragments de cette fenêtre puis seule elle est transcrite. Les horodata
 affichés restent dans le temps absolu de la source ; l'extrait téléchargé est mis
 en cache par URL + qualité + fenêtre.
 
-**VOD Twitch avec musique sous droits (« muted »).** Sur ces rediffs, la copie de
-flux ne peut sauter qu'au tout début (`0`) du flux distant — jamais à un instant
-non nul, quel qu'il soit. Détecté automatiquement : repli sur un téléchargement
-depuis `0` puis une découpe locale (plus lent si la portion visée est loin dans
-une longue rediff, mais fonctionne là où l'accès direct échoue net).
+**VOD Twitch encodés en fMP4 (récents).** Sur ces flux, le seek distant de ffmpeg
+échoue pour tout instant non nul, quel qu'il soit — peu importe l'endroit visé
+dans la rediff. Contourné en construisant une **playlist HLS locale** qui ne
+liste que les quelques segments couvrant la fenêtre demandée (repérage
+automatique) : aucune donnée hors de cette fenêtre ne transite, même à 3 h dans
+une rediff de 8 h.
 
 Sur un VOD où la voix se mêle au son du jeu / aux alertes, la transcription peut
 dériver, décaler ou sauter des passages. Les réglages par défaut sont calibrés

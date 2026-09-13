@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
+import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from yt_dlp import YoutubeDL
 
@@ -206,6 +208,128 @@ def _fetch_range_via_ffmpeg(
     return media if _is_valid_media(media) else None
 
 
+# Découpe HLS « au segment » ---------------------------------------------
+#
+# Sur certains VOD Twitch (encodage fMP4/CMAF récent — repérable au tag
+# #EXT-X-MAP dans la playlist, indépendant du fait que le VOD soit « muted »
+# ou pas), le `-ss` distant de ffmpeg dans `_fetch_range_via_ffmpeg` échoue
+# pour TOUT instant non nul : il lit ~1 Go de données mais démuxe 0 paquet.
+# Seul `start = 0` fonctionne. Contourner ça en téléchargeant `[0, end]` marche
+# mais coûte des heures de flux inutiles sur une longue rediff.
+#
+# Le vrai contournement : construire une playlist HLS **locale** qui ne liste
+# QUE les segments (+ le segment d'init fMP4 s'il y en a un) qui couvrent la
+# fenêtre demandée, et pointer ffmpeg dessus — aucun seek n'est alors
+# nécessaire (la liste est déjà la bonne), donc le bug ne s'applique jamais,
+# et seuls les segments voulus transitent sur le réseau (vérifié : ~13 Mo
+# pour 80 s sur une rediff de 3h48, quel que soit l'endroit visé).
+_EXTINF_RE = re.compile(r"#EXTINF:([0-9.]+)")
+_MAP_RE = re.compile(r'#EXT-X-MAP:URI="([^"]+)"')
+_SEGMENT_START_PAD = 12.0  # marge avant `start` : ~1 segment Twitch (10 s) de sécurité
+
+
+def _fetch_text(url: str, timeout: float = 20.0) -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def _media_playlist_url(url: str, max_height: int) -> str:
+    """URL de la playlist HLS (segments) pour la meilleure qualité <= max_height."""
+    with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True, **_client_opts()}) as ydl:
+        info = ydl.extract_info(url, download=False)
+    formats = [f for f in (info or {}).get("formats") or [] if f.get("url")]
+    candidates = [f for f in formats if f.get("height") and f["height"] <= max_height]
+    if not candidates:
+        candidates = formats
+    if not candidates:
+        raise RuntimeError("Aucun flux vidéo disponible.")
+    return max(candidates, key=lambda f: f.get("height") or 0)["url"]
+
+
+def _parse_hls_segments(text: str, base_url: str) -> tuple[str | None, list[tuple[float, str]]]:
+    """`(uri_segment_init_ou_None, [(durée, uri_absolue), ...])`."""
+    map_match = _MAP_RE.search(text)
+    map_uri = urljoin(base_url, map_match.group(1)) if map_match else None
+    segments: list[tuple[float, str]] = []
+    pending_duration: float | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("#EXTINF:"):
+            match = _EXTINF_RE.match(line)
+            pending_duration = float(match.group(1)) if match else 0.0
+        elif line and not line.startswith("#"):
+            segments.append((pending_duration or 0.0, urljoin(base_url, line)))
+            pending_duration = None
+    return map_uri, segments
+
+
+def _select_segments(
+    segments: list[tuple[float, str]], start: float, end: float, pad: float,
+) -> list[tuple[float, str]]:
+    """Segments couvrant `[start - pad, end]` — marge seulement au début (pour
+    le seek arrière façon image-clé) ; à la fin on inclut juste le segment qui
+    contient `end`, sans marge en plus (même profil d'imprécision que le
+    `-ss/-t` direct, sur lequel l'appelant se cale déjà pour recaler l'offset)."""
+    lo = max(0.0, start - pad)
+    chosen: list[tuple[float, str]] = []
+    cursor = 0.0
+    for duration, uri in segments:
+        seg_start, seg_end = cursor, cursor + duration
+        if seg_end >= lo and seg_start <= end:
+            chosen.append((duration, uri))
+        cursor = seg_end
+        if seg_start > end:
+            break
+    return chosen
+
+
+def _fetch_range_via_segments(
+    url: str, bucket: Path, start: float, end: float, max_height: int,
+) -> Path | None:
+    """Playlist locale ne listant que les segments couvrant `[start, end]`,
+    lue par ffmpeg sans seek. `None` (pas d'exception) si la playlist n'a pas
+    pu être construite ou lue — l'appelant retombe alors sur une autre méthode."""
+    try:
+        playlist_url = _media_playlist_url(url, max_height)
+        text = _fetch_text(playlist_url)
+    except Exception:  # noqa: BLE001 - repli sur une autre méthode
+        return None
+    base = playlist_url.rsplit("/", 1)[0] + "/"
+    map_uri, segments = _parse_hls_segments(text, base)
+    chosen = _select_segments(segments, start, end, _SEGMENT_START_PAD)
+    if not chosen:
+        return None
+
+    lines = ["#EXTM3U", "#EXT-X-VERSION:7", f"#EXT-X-TARGETDURATION:{int(max(d for d, _ in chosen)) + 1}"]
+    if map_uri:
+        lines.append(f'#EXT-X-MAP:URI="{map_uri}"')
+    for duration, uri in chosen:
+        lines.extend([f"#EXTINF:{duration:.3f},", uri])
+    lines.append("#EXT-X-ENDLIST")
+
+    local_playlist = bucket / "local.m3u8"
+    local_playlist.write_text("\n".join(lines), encoding="utf-8")
+    output = bucket / "v.mp4"
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                # Nécessaire pour qu'une playlist LOCALE puisse pointer vers des
+                # segments distants (http/https) : ffmpeg les refuse sinon.
+                "-protocol_whitelist", "file,http,https,tcp,tls,crypto,data",
+                "-i", str(local_playlist), "-c", "copy", str(output),
+            ],
+            capture_output=True, text=True, timeout=180,
+        )
+    finally:
+        local_playlist.unlink(missing_ok=True)
+    if result.returncode != 0 or not _is_valid_media(output):
+        output.unlink(missing_ok=True)  # sinon un résidu invalide gênerait le repli suivant
+        return None
+    return output
+
+
 def download_source_range(
     video_url: str, cache_root: str | Path, start: float, end: float, max_height: int = 1080,
 ) -> str:
@@ -216,22 +340,34 @@ def download_source_range(
     Coupe en **copie de flux** (rapide) : le début réel peut reculer jusqu'à
     l'image-clé précédente (quelques secondes de marge), pas de ré-encodage.
 
-    Deux causes distinctes peuvent rendre `[start, end]` inaccessible en direct :
+    Essaie d'abord une **playlist HLS locale** ne listant que les segments
+    voulus (`_fetch_range_via_segments`) : ne transfère jamais plus que la
+    fenêtre demandée (± une poignée de secondes), quel que soit l'endroit visé
+    dans une rediff de plusieurs heures — et contourne au passage un bug de
+    seek ffmpeg sur les VOD encodés en fMP4 (voir plus haut).
 
-    1. `end` déborde de la toute fin réelle du flux (le duration annoncé par
-       la plateforme peut être légèrement optimiste) -> on retente en reculant
-       `end` de `_END_PULLBACK_S` par cran, jusqu'à `_END_PULLBACK_ATTEMPTS` fois.
-    2. Le VOD tourne sur une playlist Twitch **« muted »** (musique sous droits
-       coupée sur tout ou partie de la rediff) : ffmpeg n'arrive alors à sauter
-       (`-ss`) qu'à `start = 0`, jamais à un instant non nul — quel que soit cet
-       instant. Repli : télécharger `[0, end]` (ça marche toujours) puis
-       découper `[start, end]` **localement** (le seek sur un fichier local
-       n'a pas cette limite). Plus lent — voire coûteux si `start` est loin
-       dans une longue rediff — mais ça marche là où le direct échoue net.
+    Si cette playlist ne peut pas être construite ou lue (manifeste
+    inhabituel), replis successifs :
+
+    1. `download_ranges` (ffmpeg, `-ss`/`-t` distant), avec retrait de `end`
+       par `_END_PULLBACK_S` si elle déborde de la toute fin réelle du flux ;
+    2. téléchargement de `[0, end]` puis découpe locale — fonctionne toujours,
+       mais coûteux si `start` est loin dans une longue rediff.
     """
     url = _validate_url(video_url)
     if end <= start:
         raise ValueError("La fin de la fenêtre doit être après le début.")
+
+    bucket = _range_bucket(cache_root, url, max_height, start, end)
+    cached = _cached_media(bucket)
+    if cached is not None:
+        return str(cached)
+    try:
+        media = _fetch_range_via_segments(url, bucket, start, end, max_height)
+    except Exception:  # noqa: BLE001 - repli sur download_ranges ci-dessous
+        media = None
+    if media is not None:
+        return str(media)
 
     last_error: Exception | None = None
     for attempt in range(_END_PULLBACK_ATTEMPTS):
@@ -259,18 +395,20 @@ def download_source_range(
 
     raise RuntimeError(
         "Impossible de télécharger cette fenêtre — sa fin dépasse probablement "
-        "la fin réelle du flux disponible, ou ce VOD (musique sous droits "
-        "\"muted\") empêche tout accès direct à un instant non nul."
+        "la fin réelle du flux disponible, ou le manifeste distant refuse tout "
+        "accès direct à un instant non nul et la playlist locale n'a pas pu "
+        "être construite non plus."
     ) from last_error
 
 
 def _download_range_from_start_and_trim(
     url: str, cache_root: str | Path, start: float, end: float, max_height: int,
 ) -> str:
-    """Repli pour les VOD « muted » (voir `download_source_range`) : télécharge
-    `[0, end]` — un `start` non nul est ce qui échoue, `0` fonctionne toujours
-    sur ces flux — puis découpe `[start, end]` localement avec ffmpeg (copie de
-    flux, aucune limite de seek sur un fichier local)."""
+    """Dernier repli (voir `download_source_range`) quand ni la playlist locale
+    ni `download_ranges` distant n'ont marché : télécharge `[0, end]` — `0`
+    fonctionne toujours, même sur les flux qui refusent tout `start` non nul —
+    puis découpe `[start, end]` localement avec ffmpeg (copie de flux, aucune
+    limite de seek sur un fichier local)."""
     full_bucket = _range_bucket(cache_root, url, max_height, 0.0, end)
     full_media = _cached_media(full_bucket)
     if full_media is None:
