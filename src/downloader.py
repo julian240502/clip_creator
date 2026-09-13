@@ -266,30 +266,38 @@ def _parse_hls_segments(text: str, base_url: str) -> tuple[str | None, list[tupl
 
 def _select_segments(
     segments: list[tuple[float, str]], start: float, end: float, pad: float,
-) -> list[tuple[float, str]]:
-    """Segments couvrant `[start - pad, end]` — marge seulement au début (pour
-    le seek arrière façon image-clé) ; à la fin on inclut juste le segment qui
-    contient `end`, sans marge en plus (même profil d'imprécision que le
-    `-ss/-t` direct, sur lequel l'appelant se cale déjà pour recaler l'offset)."""
+) -> tuple[list[tuple[float, str]], float]:
+    """`([(durée, uri), ...], début_absolu_du_1er_segment_choisi)` couvrant
+    `[start - pad, end]` — marge seulement au début (pour le seek arrière
+    façon image-clé) ; à la fin on inclut juste le segment qui contient `end`,
+    sans marge en plus (même profil d'imprécision que le `-ss/-t` direct, sur
+    lequel l'appelant se cale déjà pour recaler l'offset)."""
     lo = max(0.0, start - pad)
     chosen: list[tuple[float, str]] = []
+    first_start = 0.0
     cursor = 0.0
     for duration, uri in segments:
         seg_start, seg_end = cursor, cursor + duration
         if seg_end >= lo and seg_start <= end:
+            if not chosen:
+                first_start = seg_start
             chosen.append((duration, uri))
         cursor = seg_end
         if seg_start > end:
             break
-    return chosen
+    return chosen, first_start
 
 
 def _fetch_range_via_segments(
     url: str, bucket: Path, start: float, end: float, max_height: int,
-) -> Path | None:
+    output_name: str = "v.mp4",
+) -> tuple[Path, float] | None:
     """Playlist locale ne listant que les segments couvrant `[start, end]`,
     lue par ffmpeg sans seek. `None` (pas d'exception) si la playlist n'a pas
-    pu être construite ou lue — l'appelant retombe alors sur une autre méthode."""
+    pu être construite ou lue — l'appelant retombe alors sur une autre méthode.
+    Renvoie `(fichier, début_absolu_du_1er_segment_choisi)` — le fichier
+    démarre à cet instant, pas nécessairement `start` (granularité des
+    segments) ; l'appelant recale s'il a besoin d'un début exact."""
     try:
         playlist_url = _media_playlist_url(url, max_height)
         text = _fetch_text(playlist_url)
@@ -297,7 +305,7 @@ def _fetch_range_via_segments(
         return None
     base = playlist_url.rsplit("/", 1)[0] + "/"
     map_uri, segments = _parse_hls_segments(text, base)
-    chosen = _select_segments(segments, start, end, _SEGMENT_START_PAD)
+    chosen, first_start = _select_segments(segments, start, end, _SEGMENT_START_PAD)
     if not chosen:
         return None
 
@@ -310,7 +318,7 @@ def _fetch_range_via_segments(
 
     local_playlist = bucket / "local.m3u8"
     local_playlist.write_text("\n".join(lines), encoding="utf-8")
-    output = bucket / "v.mp4"
+    output = bucket / output_name
     try:
         result = subprocess.run(
             [
@@ -327,7 +335,7 @@ def _fetch_range_via_segments(
     if result.returncode != 0 or not _is_valid_media(output):
         output.unlink(missing_ok=True)  # sinon un résidu invalide gênerait le repli suivant
         return None
-    return output
+    return output, first_start
 
 
 def download_source_range(
@@ -363,11 +371,11 @@ def download_source_range(
     if cached is not None:
         return str(cached)
     try:
-        media = _fetch_range_via_segments(url, bucket, start, end, max_height)
+        fetched = _fetch_range_via_segments(url, bucket, start, end, max_height)
     except Exception:  # noqa: BLE001 - repli sur download_ranges ci-dessous
-        media = None
-    if media is not None:
-        return str(media)
+        fetched = None
+    if fetched is not None:
+        return str(fetched[0])
 
     last_error: Exception | None = None
     for attempt in range(_END_PULLBACK_ATTEMPTS):
@@ -401,6 +409,23 @@ def download_source_range(
     ) from last_error
 
 
+def _trim_local(source: Path, offset: float, duration: float, output: Path) -> bool:
+    """Découpe `[offset, offset+duration]` d'un fichier LOCAL avec ffmpeg (copie
+    de flux) — aucune limite de seek ici, contrairement à un flux distant."""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", str(max(0.0, offset)), "-i", str(source), "-t", str(duration),
+            "-c", "copy", str(output),
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not _is_valid_media(output):
+        output.unlink(missing_ok=True)
+        return False
+    return True
+
+
 def _download_range_from_start_and_trim(
     url: str, cache_root: str | Path, start: float, end: float, max_height: int,
 ) -> str:
@@ -421,16 +446,8 @@ def _download_range_from_start_and_trim(
     if cached_trim is not None:
         return str(cached_trim)
     output = trimmed_bucket / f"{full_media.stem}_trim{full_media.suffix}"
-    result = subprocess.run(
-        [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", str(max(0.0, start)), "-i", str(full_media), "-t", str(end - start),
-            "-c", "copy", str(output),
-        ],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0 or not _is_valid_media(output):
-        raise RuntimeError(result.stderr.strip() or "Découpage local impossible.")
+    if not _trim_local(full_media, start, end - start, output):
+        raise RuntimeError("Découpage local impossible.")
     return str(output)
 
 
@@ -447,8 +464,29 @@ def download_clip(
         raise ValueError("La fin de l'extrait doit être après le début.")
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
-    for stale in destination.glob("preview_source.*"):
+    for stale in destination.glob("preview_source*"):
         stale.unlink()
+
+    # Même bug de seek fMP4 que download_source_range (voir plus haut) : sur un
+    # VOD concerné, un aperçu loin dans la vidéo revenait vide -> plus aucune
+    # piste audio pour Whisper ("Output file does not contain any stream").
+    # Même parade : playlist HLS locale (juste les segments utiles) puis
+    # découpe locale précise (l'aperçu a besoin d'un extrait exact, pas
+    # juste "à la granularité du segment près").
+    try:
+        fetched = _fetch_range_via_segments(
+            url, destination, start, end, max_height, output_name="preview_source_raw.mp4",
+        )
+    except Exception:  # noqa: BLE001 - repli sur download_ranges ci-dessous
+        fetched = None
+    if fetched is not None:
+        raw_media, raw_start = fetched
+        trimmed = destination / "preview_source.mp4"
+        ok = _trim_local(raw_media, start - raw_start, end - start, trimmed)
+        raw_media.unlink(missing_ok=True)
+        if ok:
+            return str(trimmed)
+
     options = {
         "format": _format_selector(max_height),
         "merge_output_format": "mp4",

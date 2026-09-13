@@ -120,9 +120,10 @@ def test_select_segments_pads_only_the_start_not_the_end() -> None:
     from src.downloader import _select_segments
 
     segments = [(10.0, f"seg{i}.mp4") for i in range(10)]  # couvre 0-100 s, 10 s/segment
-    chosen = _select_segments(segments, start=70.0, end=76.0, pad=12.0)
+    chosen, first_start = _select_segments(segments, start=70.0, end=76.0, pad=12.0)
     # start - pad = 58 -> segment [50,60) ; end = 76 -> segment [70,80), pas plus loin.
     assert [uri for _dur, uri in chosen] == ["seg5.mp4", "seg6.mp4", "seg7.mp4"]
+    assert first_start == 50.0
 
 
 def test_download_source_range_fetches_only_the_needed_hls_segments(
@@ -193,6 +194,58 @@ def test_download_source_range_fetches_only_the_needed_hls_segments(
         "https://cdn.test/vod/30.mp4",
     ]  # pas les 50 segments de la rediff
     assert '#EXT-X-MAP:URI="https://cdn.test/vod/init-0.mp4"' in written_playlists[0]
+
+
+def test_download_clip_uses_segments_then_trims_to_the_exact_window(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Même bug de seek fMP4 pour l'aperçu ("Aperçu impossible : ... Output file
+    does not contain any stream", plus de piste audio pour Whisper). Fetch par
+    segments (large, à la granularité du segment près) PUIS découpe locale pour
+    retomber sur EXACTEMENT [start, end] — l'aperçu en a besoin (~4 s précis)."""
+    from src.downloader import download_clip
+
+    playlist_text = (
+        "#EXTM3U\n" + "".join(f"#EXTINF:10.000,\n{i}.mp4\n" for i in range(50)) + "#EXT-X-ENDLIST\n"
+    )
+
+    class FakeProbeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            return {"formats": [{"url": "https://cdn.test/vod/index-X.m3u8", "height": 480}]}
+
+    calls: list[list[str]] = []
+
+    class FakeResult:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=None):
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"x" * 150_000)
+        return FakeResult()
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeProbeYDL)
+    monkeypatch.setattr(downloader, "_fetch_text", lambda url, timeout=20.0: playlist_text)
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    # start=304 -> 1er segment choisi est [290,300) (pad=12 -> lo=292) : first_start=290.
+    media = download_clip("https://www.twitch.tv/videos/1", tmp_path, 304.0, 308.0, max_height=480)
+    assert Path(media).name == "preview_source.mp4"
+    assert Path(media).stat().st_size >= 100_000
+    assert len(calls) == 2  # 1 concat playlist + 1 découpe locale précise
+
+    trim_cmd = calls[1]
+    assert float(trim_cmd[trim_cmd.index("-ss") + 1]) == pytest.approx(304.0 - 290.0)
+    assert float(trim_cmd[trim_cmd.index("-t") + 1]) == pytest.approx(4.0)
 
 
 def test_download_source_range_downloads_only_the_window(monkeypatch, tmp_path: Path) -> None:
