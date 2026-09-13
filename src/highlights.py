@@ -314,7 +314,11 @@ def _chat_peak(start: float, end: float, spikes: list[tuple[float, float]] | Non
 # (pas de détection auto : trop de façons de se tromper sur un simple VOD).
 # Chaque profil est (chat, énergie, hook, dialogue), toujours somme 100.
 CONTENT_PROFILES: dict[str, tuple[float, float, float, float]] = {
-    "gaming": (40.0, 25.0, 20.0, 15.0),      # gaming / réaction : chat & ambiance priorisés
+    # gaming / réaction : chat & ambiance priorisés — sur ce type de contenu,
+    # une bonne "accroche" (façon vidéo parlée) compte pour peu à côté d'une
+    # réaction franche du chat ou d'un pic de rires/cris ; on la garde non
+    # nulle (un extrait qui ouvre bien reste un plus) mais sans qu'elle pèse.
+    "gaming": (40.0, 40.0, 5.0, 15.0),
     "podcast": (5.0, 15.0, 35.0, 45.0),      # podcast / interview : dialogue & accroche priorisés
     "balanced": (20.0, 20.0, 30.0, 30.0),    # équilibré
 }

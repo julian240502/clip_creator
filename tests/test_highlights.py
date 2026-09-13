@@ -303,10 +303,10 @@ def test_score_weights_uses_the_chosen_profile_when_chat_is_available() -> None:
 def test_score_weights_redistributes_chat_when_unavailable() -> None:
     chat, energy, hook, dialogue = _score_weights(chat_available=False, profile="gaming")
     assert chat == 0.0
-    # rien n'est perdu : la somme reste 100, et l'ordre relatif energy > hook >
-    # dialogue (celui du profil gaming) est préservé.
+    # rien n'est perdu : la somme reste 100, et l'ordre relatif energy >
+    # dialogue > hook (celui du profil gaming) est préservé.
     assert energy + hook + dialogue == pytest.approx(100.0)
-    assert energy > hook > dialogue
+    assert energy > dialogue > hook
 
 
 def test_score_weights_unknown_profile_falls_back_to_default() -> None:

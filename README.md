@@ -101,9 +101,9 @@ qui ouvrent fort portent un badge **⚡ Accroche forte** et affichent la phrase 
 Le score de viralité combine 4 signaux — **chat Twitch, ambiance (rires/cris), accroche,
 dialogue** — dont la priorité se règle via **« Type de contenu »** :
 
-- **Gaming / réaction** *(recommandé)* : chat & ambiance priorisés — pensé pour un
-  moment de gameplay/réaction où l'action et la réaction du public comptent plus que
-  l'éloquence du texte.
+- **Gaming / réaction** *(recommandé)* : chat & ambiance très largement priorisés —
+  pensé pour un moment de gameplay/réaction où ce qui se passe et la réaction du
+  public comptent bien plus qu'une accroche façon vidéo parlée, qui pèse à peine.
 - **Podcast / interview** : dialogue & accroche priorisés — pas d'action physique ni
   de chat à attendre, c'est ce qui est dit qui fait le clip.
 - **Équilibré** : les 4 signaux pèsent à peu près pareil.
