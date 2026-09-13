@@ -196,6 +196,57 @@ def test_download_source_range_fetches_only_the_needed_hls_segments(
     assert '#EXT-X-MAP:URI="https://cdn.test/vod/init-0.mp4"' in written_playlists[0]
 
 
+def test_download_source_range_trims_hls_segments_to_the_exact_window(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Sans découpe, la playlist locale rend des segments ENTIERS (jusqu'à
+    ~1 segment de trop à chaque bord) — get_video_duration dépasse alors la
+    fenêtre demandée de bien plus que ce que le recalage lead/media_t0 des
+    appelants (pipeline.py) tolère, d'où un décalage audio/sous-titres dans le
+    clip final. Le résultat doit correspondre EXACTEMENT à [start, end]."""
+    from src.downloader import download_source_range
+
+    playlist_text = (
+        "#EXTM3U\n" + "".join(f"#EXTINF:10.000,\n{i}.mp4\n" for i in range(50)) + "#EXT-X-ENDLIST\n"
+    )
+
+    class FakeProbeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            return {"formats": [{"url": "https://cdn.test/vod/index-X.m3u8", "height": 480}]}
+
+    calls: list[list[str]] = []
+
+    class FakeResult:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=None):
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"x" * 150_000)
+        return FakeResult()
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeProbeYDL)
+    monkeypatch.setattr(downloader, "_fetch_text", lambda url, timeout=20.0: playlist_text)
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    # start=304 -> 1er segment choisi [290,300) (pad=12 -> lo=292) : first_start=290.
+    download_source_range("https://www.twitch.tv/videos/1", tmp_path, 304.0, 308.0, max_height=480)
+    assert len(calls) == 2  # 1 concat playlist (segments entiers) + 1 découpe locale exacte
+
+    trim_cmd = calls[1]
+    assert float(trim_cmd[trim_cmd.index("-ss") + 1]) == pytest.approx(304.0 - 290.0)
+    assert float(trim_cmd[trim_cmd.index("-t") + 1]) == pytest.approx(4.0)
+
+
 def test_download_clip_uses_segments_then_trims_to_the_exact_window(
     monkeypatch, tmp_path: Path,
 ) -> None:

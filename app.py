@@ -78,6 +78,13 @@ label p, [data-testid="stWidgetLabel"] p {color:#e2e3f0 !important}
 [data-testid="stStatus"] summary:hover p {color:#fff}
 [data-testid="stStatus"] [data-testid="stMarkdownContainer"] p {color:#d6d8e6}
 
+/* Bandeau Streamlit natif (menu, bouton Stop/Deploy) : reste blanc par défaut,
+   tranche sur le fond sombre du reste de l'appli. */
+[data-testid="stHeader"] {background:#0d0e18 !important}
+[data-testid="stToolbar"] {background:transparent !important}
+[data-testid="stStatusWidget"] {color:#e2e3f0}
+[data-testid="stStatusWidget"] svg {fill:#e2e3f0}
+
 /* Estimation mise en avant */
 [data-testid="stMetric"] {background:#181a26;border:1px solid #2c2f42;border-left:3px solid #8b87ff;padding:1rem 1.1rem;border-radius:14px}
 [data-testid="stMetricValue"] {color:#fff;font-weight:700}

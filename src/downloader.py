@@ -371,11 +371,24 @@ def download_source_range(
     if cached is not None:
         return str(cached)
     try:
-        fetched = _fetch_range_via_segments(url, bucket, start, end, max_height)
+        fetched = _fetch_range_via_segments(url, bucket, start, end, max_height, output_name="raw.mp4")
     except Exception:  # noqa: BLE001 - repli sur download_ranges ci-dessous
         fetched = None
     if fetched is not None:
-        return str(fetched[0])
+        raw_media, raw_start = fetched
+        # La playlist locale rend des segments ENTIERS (jusqu'à ~1 de plus à
+        # chaque bord) : sans découpe, `get_video_duration` peut dépasser la
+        # fenêtre demandée de bien plus que les quelques secondes que les
+        # appelants tolèrent (leur calcul de recalage `lead`/`media_t0`,
+        # pensé pour l'imprécision "image-clé" du seek direct, ignore alors la
+        # correction — décalage audio/sous-titres dans le clip final). On
+        # découpe donc localement à `[start, end]`, comme le fait déjà
+        # `download_clip` pour les aperçus.
+        trimmed = bucket / "v.mp4"
+        ok = _trim_local(raw_media, start - raw_start, end - start, trimmed)
+        raw_media.unlink(missing_ok=True)
+        if ok:
+            return str(trimmed)
 
     last_error: Exception | None = None
     for attempt in range(_END_PULLBACK_ATTEMPTS):
