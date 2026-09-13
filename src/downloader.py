@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 from yt_dlp import YoutubeDL
 
 from src.paths import RAW_VIDEOS_DIR
+from src.twitch_chat import is_twitch_vod
 
 
 def _client_opts() -> dict:
@@ -400,10 +401,19 @@ def download_source_range(
     cached = _cached_media(bucket)
     if cached is not None:
         return str(cached)
-    try:
-        fetched = _fetch_range_via_segments(url, bucket, start, end, max_height, output_name="raw.mp4")
-    except Exception:  # noqa: BLE001 - repli sur download_ranges ci-dessous
-        fetched = None
+    fetched = None
+    if is_twitch_vod(url):
+        # La playlist locale n'a d'intérêt que pour le bug de seek fMP4
+        # spécifique aux VOD Twitch (voir plus haut) : sur les autres sources
+        # (YouTube...), `_media_playlist_url` choisit un format par hauteur
+        # sans vérifier la présence d'une piste audio, alors que YouTube sert
+        # souvent le flux vidéo et le flux audio séparément (DASH) — un aperçu
+        # sans son en résulterait. `_fetch_range_via_ffmpeg`/`download_ranges`
+        # gèrent déjà correctement l'appariement audio+vidéo pour ces sources.
+        try:
+            fetched = _fetch_range_via_segments(url, bucket, start, end, max_height, output_name="raw.mp4")
+        except Exception:  # noqa: BLE001 - repli sur download_ranges ci-dessous
+            fetched = None
     if fetched is not None:
         raw_media, raw_start = fetched
         # La playlist locale rend des segments ENTIERS (jusqu'à ~1 de plus à
@@ -516,12 +526,20 @@ def download_clip(
     # Même parade : playlist HLS locale (juste les segments utiles) puis
     # découpe locale précise (l'aperçu a besoin d'un extrait exact, pas
     # juste "à la granularité du segment près").
-    try:
-        fetched = _fetch_range_via_segments(
-            url, destination, start, end, max_height, output_name="preview_source_raw.mp4",
-        )
-    except Exception:  # noqa: BLE001 - repli sur download_ranges ci-dessous
-        fetched = None
+    fetched = None
+    if is_twitch_vod(url):
+        # Idem download_source_range : ce contournement est spécifique au bug
+        # de seek fMP4 des VOD Twitch. Sur YouTube, `_media_playlist_url`
+        # choisirait un format sans piste audio (flux DASH séparés) et
+        # produirait un aperçu muet -> échec de `_extract_audio` ("Output
+        # file does not contain any stream"). Le repli `download_ranges`
+        # apparie déjà correctement audio+vidéo via `_format_selector`.
+        try:
+            fetched = _fetch_range_via_segments(
+                url, destination, start, end, max_height, output_name="preview_source_raw.mp4",
+            )
+        except Exception:  # noqa: BLE001 - repli sur download_ranges ci-dessous
+            fetched = None
     if fetched is not None:
         raw_media, raw_start = fetched
         trimmed = destination / "preview_source.mp4"

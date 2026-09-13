@@ -302,6 +302,80 @@ def test_download_clip_uses_segments_then_trims_to_the_exact_window(
     assert float(trim_cmd[trim_cmd.index("-t") + 1]) == pytest.approx(4.0)
 
 
+def test_download_clip_skips_the_segment_playlist_for_a_non_twitch_url(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Le contournement par playlist HLS locale est spécifique au bug de seek
+    fMP4 des VOD Twitch. Sur une autre source (YouTube...), `_media_playlist_url`
+    choisirait un format par hauteur sans vérifier la présence d'une piste
+    audio (flux DASH vidéo/audio séparés) -> aperçu muet, "Output file does not
+    contain any stream" pour Whisper. Il ne doit donc jamais être tenté hors
+    Twitch : `download_clip` doit filer directement sur le repli existant, qui
+    apparie déjà correctement audio+vidéo (`_format_selector`)."""
+    from src.downloader import download_clip
+
+    def boom(*_a, **_k):
+        raise AssertionError("la playlist HLS locale ne doit pas être tentée hors Twitch")
+
+    monkeypatch.setattr(downloader, "_fetch_range_via_segments", boom)
+
+    class FakeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            out = Path(self.options["outtmpl"].replace("%(ext)s", "mp4"))
+            out.write_bytes(b"x" * 150_000)
+            return {"id": "v1"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    monkeypatch.setattr("src.video_splitter.get_video_duration", lambda path: 100.0)
+
+    media = download_clip("https://www.youtube.com/watch?v=abc123", tmp_path, 304.0, 308.0, max_height=480)
+    assert Path(media).stat().st_size >= 100_000
+
+
+def test_download_source_range_skips_the_segment_playlist_for_a_non_twitch_url(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Même garde-fou que ci-dessus pour la fenêtre pleine résolution."""
+    from src.downloader import download_source_range
+
+    def boom(*_a, **_k):
+        raise AssertionError("la playlist HLS locale ne doit pas être tentée hors Twitch")
+
+    monkeypatch.setattr(downloader, "_fetch_range_via_segments", boom)
+
+    class FakeYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            out = Path(self.options["outtmpl"].replace("%(id)s.%(ext)s", "v1.mp4"))
+            out.write_bytes(b"x" * 150_000)
+            return {"id": "v1"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", FakeYDL)
+    monkeypatch.setattr("src.video_splitter.get_video_duration", lambda path: 100.0)
+
+    media = download_source_range(
+        "https://www.youtube.com/watch?v=abc123", tmp_path, 300.0, 306.0, max_height=480,
+    )
+    assert Path(media).stat().st_size >= 100_000
+
+
 def test_download_source_range_downloads_only_the_window(monkeypatch, tmp_path: Path) -> None:
     """Fenêtre analysée d'une rediff de 5 h : yt-dlp reçoit un download_ranges, et
     le résultat est mis en cache par URL + qualité + fenêtre."""
