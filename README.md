@@ -247,6 +247,53 @@ affichage **en bloc** par unité, sans mode mot par mot / karaoké. Pour le chin
 coréen / japonais, une police à glyphes adaptés est imposée (*Microsoft YaHei* /
 *Malgun Gothic* / *Yu Gothic*, livrées avec Windows). Nécessite Ollama.
 
+## Ligne de commande (CLI)
+
+`cli.py` donne accès au même moteur que l'interface, sans navigateur — pour un
+script, une tâche planifiée ou un agent IA (Claude Code…). La progression
+s'affiche sur stderr, le résultat est un **JSON sur stdout**.
+
+```bash
+# Infos d'une URL (sans télécharger)
+python cli.py info "https://www.twitch.tv/videos/123"
+
+# Analyse : télécharge en 480p, transcrit, repère les moments
+python cli.py analyze "https://www.twitch.tv/videos/123" --start 1:00:00 --end 1:45:00 --chat --count 10
+#  → data/analyses/<date>-<titre>/analysis.json  (extraits notés, pics de volume, pics de chat)
+#    + transcript.txt lisible ([12:30.4 → 12:34.1] texte) + vignettes
+
+# Rendu des extraits choisis dans l'analyse (ids)
+python cli.py render --analysis data/analyses/<…>/analysis.json --pick 1,3,4 --captions active
+
+# Rendu de fenêtres précises, avec titres / descriptions / hashtags fournis
+python cli.py render --analysis …/analysis.json --clips choix.json --publish "G:/Mon Drive/Clips" --label Streamer
+
+# Mode régulier : découpe 10:00 → 20:00 en clips de 30 s
+python cli.py render video.mp4 --start 10:00 --end 20:00 --length 30
+
+# Images d'un passage, pour vérifier visuellement
+python cli.py frames video.mp4 --window 12:30-13:05 --count 6
+```
+
+`choix.json` :
+
+```json
+[
+  {"start": "1:02:10", "end": "1:02:41", "title": "Il rate le saut le plus facile du jeu",
+   "description": "…", "hashtags": ["#gta6", "#fail"]}
+]
+```
+
+Options de rendu : `--format 9:16|4:5|1:1|16:9|source`, `--quality 720p|1080p|4k`,
+`--background blur|black|reframe|split` (+ `--facecam X,Y,L,H` en fractions pour
+`split`), `--captions active|karaoke|fade|headline`, `--caption-lang fr|en|zh|ko`,
+`--meta` (titres via Ollama), `--publish DOSSIER --label NOM`. Détail :
+`python cli.py render --help`.
+
+Avec `--analysis`, le transcript de l'analyse est réutilisé (pas de
+retranscription) et, pour une URL, seules les fenêtres choisies sont
+téléchargées en pleine qualité.
+
 ## Prérequis
 
 - Python 3.10 ou plus récent ;

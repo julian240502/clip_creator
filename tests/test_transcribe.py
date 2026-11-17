@@ -1,4 +1,6 @@
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -154,6 +156,13 @@ def test_extract_audio_applies_clean_filter_when_enabled(monkeypatch, tmp_path: 
     assert "-af" not in seen["cmd"]
 
 
+def _fake_faster_whisper(monkeypatch, batched) -> None:
+    """Module `faster_whisper` factice : le test tourne même sans la dépendance (CI)."""
+    module = types.ModuleType("faster_whisper")
+    module.BatchedInferencePipeline = batched
+    monkeypatch.setitem(sys.modules, "faster_whisper", module)
+
+
 def test_run_transcription_prefers_the_batched_pipeline(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -167,20 +176,16 @@ def test_run_transcription_prefers_the_batched_pipeline(monkeypatch) -> None:
             assert kw["word_timestamps"] is True
             return iter(()), object()
 
-    import faster_whisper
-
-    monkeypatch.setattr(faster_whisper, "BatchedInferencePipeline", FakeBatched)
+    _fake_faster_whisper(monkeypatch, FakeBatched)
     _run_transcription(object(), "a.wav", None)
     assert calls == ["construct", "batched"]
 
 
 def test_run_transcription_falls_back_to_sequential(monkeypatch) -> None:
-    import faster_whisper
-
     def boom(model=None):
         raise RuntimeError("pas de VRAM pour le batché")
 
-    monkeypatch.setattr(faster_whisper, "BatchedInferencePipeline", boom)
+    _fake_faster_whisper(monkeypatch, boom)
 
     used: dict[str, dict] = {}
 

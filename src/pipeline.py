@@ -328,15 +328,20 @@ def process_video(
         from src.transcribe import dump_transcript
         from src.transcribe import transcribe as run_transcription
 
-        report(0.15, "Transcription de la vidéo…")
-        # Ne transcrire que la portion traitée (rediff de plusieurs heures).
-        sub = None
-        if window_start > 0.5 or window_end < src_duration - 0.5:
-            sub = (window_start, window_end)
-        transcript = run_transcription(
-            source, model=transcribe_model, clip_range=sub,
-            progress=lambda value, message: report(0.15 + 0.08 * value, message),
-        )
+        if pretranscript is not None and pretranscript.words and not rebase:
+            # Transcript déjà calculé (analyse / CLI) sur un fichier local : même
+            # référentiel de temps, inutile de retranscrire.
+            transcript = pretranscript
+        else:
+            report(0.15, "Transcription de la vidéo…")
+            # Ne transcrire que la portion traitée (rediff de plusieurs heures).
+            sub = None
+            if window_start > 0.5 or window_end < src_duration - 0.5:
+                sub = (window_start, window_end)
+            transcript = run_transcription(
+                source, model=transcribe_model, clip_range=sub,
+                progress=lambda value, message: report(0.15 + 0.08 * value, message),
+            )
         dump_transcript(transcript, project_dir / "transcript.json")
         if captions_style is not None and not transcript.words:
             # Aucune parole détectée : on garde les clips mais sans sous-titres.
