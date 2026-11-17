@@ -511,6 +511,7 @@ def cmd_render(args: argparse.Namespace) -> dict:
         vertical_background=args.background, split_layout=split_layout,
         source_start=source_start, source_end=source_end, source_duration=source.get("duration"),
         clips_windows=windows, pretranscript=pretranscript,
+        transcribe=bool(args.meta),  # titres & hashtags ont besoin du transcript, même sans sous-titres
         captions_style=captions_style, caption_lang=args.caption_lang,
         generate_meta=bool(args.meta), meta_model=meta_model, clips_hints=hints,
         video_title=source.get("title"), progress=progress,

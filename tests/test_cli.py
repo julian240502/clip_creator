@@ -114,6 +114,19 @@ def test_analyze_then_pick_with_captions(long_video, tmp_path, capsys, monkeypat
     assert calls["n"] == 1  # le transcript de l'analyse est réutilisé, pas de 2e transcription
 
 
+def test_render_meta_without_captions(long_video, capsys, monkeypatch):
+    import src.transcribe as transcribe_mod
+
+    monkeypatch.setattr(transcribe_mod, "transcribe", lambda *_a, **_k: _fake_transcript())
+    monkeypatch.setattr(transcribe_mod, "transcription_available", lambda: True)
+    out = _run(capsys, [
+        "render", str(long_video), "--window", "0:10-0:20", "--meta",
+        "--quality", "720p", "--encoder", "cpu", "--speed", "fast",
+    ])
+    text_file = out["clips"][0]["text_file"]
+    assert text_file and Path(text_file).read_text(encoding="utf-8").strip()
+
+
 def test_frames(long_video, tmp_path, capsys):
     out = _run(capsys, ["frames", str(long_video), "--window", "10-20", "--count", "3",
                         "--out", str(tmp_path / "frames")])
